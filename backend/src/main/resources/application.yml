@@ -1,0 +1,65 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: taskmanagesys-backend
+  servlet:
+    multipart:
+      max-file-size: 2MB
+      max-request-size: 3MB
+  datasource:
+    url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:taskmanagesys}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: false
+        jdbc:
+          time_zone: UTC
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+  mail:
+    host: ${MAIL_HOST:localhost}
+    port: ${MAIL_PORT:1025}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      mail:
+        smtp:
+          auth: ${MAIL_SMTP_AUTH:false}
+          starttls:
+            enable: ${MAIL_SMTP_STARTTLS:false}
+          connectiontimeout: ${MAIL_CONNECTION_TIMEOUT:10000}
+          timeout: ${MAIL_READ_TIMEOUT:10000}
+          writetimeout: ${MAIL_WRITE_TIMEOUT:10000}
+
+app:
+  cookie:
+    secure: ${COOKIE_SECURE:true}
+  archive:
+    cron: ${ARCHIVE_CRON:0 0 2 * * *}
+    zone: ${ARCHIVE_ZONE:Africa/Cairo}
+  base-url: ${APP_BASE_URL:http://localhost:5173}
+  upload-dir: ${UPLOAD_DIR:./uploads}
+  jwt-secret: ${JWT_SECRET:supersecretjwtkeythatisatleast256bitslongfortaskmanagementsystem2026}
+  timezone: Africa/Cairo
+  mail:
+    enabled: ${MAIL_ENABLED:false}
+    from: ${MAIL_FROM:no-reply@localhost}
+    from-name: ${MAIL_FROM_NAME:Task Management System}
+    reply-to: ${MAIL_REPLY_TO:}
+  seed-manager:
+    first-name: ${SEED_MANAGER_FIRST_NAME:System}
+    last-name: ${SEED_MANAGER_LAST_NAME:Manager}
+    email: ${SEED_MANAGER_EMAIL:manager@gmail.com}
+    password: ${SEED_MANAGER_PASSWORD:Manager123!}
+    phone: ${SEED_MANAGER_PHONE:+201000000000}

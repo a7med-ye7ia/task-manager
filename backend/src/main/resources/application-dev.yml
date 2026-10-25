@@ -1,0 +1,10 @@
+spring:
+  config:
+    activate:
+      on-profile: dev
+
+app:
+  mail:
+    enabled: false
+  cookie:
+    secure: false

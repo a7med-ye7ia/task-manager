@@ -1,0 +1,35 @@
+# Environment variables
+.env
+*.env.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Backend (Maven / Java / Spring Boot)
+backend/target/
+backend/.mvn/wrapper/maven-wrapper.jar
+backend/*.log
+backend/uploads/
+uploads/
+
+# Frontend (Node / Vite / React)
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/*.local
+
+# IDEs
+.idea/
+*.iml
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# local dumps and tool output
+backup-*.sql
+vitest-out.txt
+backend-test.log

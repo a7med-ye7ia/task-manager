@@ -1,0 +1,70 @@
+.avatar-menu {
+    position: absolute;
+    right: 0;
+    top: 42px;
+    z-index: 120;
+    min-width: 170px;
+    padding: .35rem;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    background: var(--bg-card);
+    box-shadow: var(--shadow-md)
+}
+
+.avatar-menu-item {
+    display: flex;
+    align-items: center;
+    gap: .5rem;
+    width: 100%;
+    padding: .55rem .65rem;
+    border: 0;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-main);
+    cursor: pointer;
+    text-align: left;
+    font: inherit
+}
+
+.avatar-menu-item:hover {
+    background: var(--primary);
+    color: #fff
+}
+
+.avatar-menu-item.danger:hover {
+    background: var(--danger);
+    color: #fff
+}
+
+.avatar-menu-item input {
+    display: none
+}
+
+@media(prefers-reduced-motion:no-preference) {
+    .avatar-menu-item:hover svg {
+        animation: avatar-menu-shake 0.2s ease-in-out infinite
+    }
+
+    .avatar-menu-item:hover {
+        animation: avatar-menu-pulse 2s ease-in-out infinite
+    }
+}
+
+@keyframes avatar-menu-shake {
+
+    0%,
+    100% {
+        transform: rotate(0)
+    }
+
+    50% {
+        transform: rotate(-8deg)
+    }
+}
+
+@keyframes avatar-menu-pulse {
+    50% {
+        transform: scale(1.015);
+        box-shadow: 0 0 0 3px var(--primary-soft)
+    }
+}
