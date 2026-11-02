@@ -43,7 +43,7 @@ app:
   mail:
     enabled: false
     from: no-reply@localhost
-    from-name: Task Management System
+    from-name: Task Manager
   base-url: http://localhost:5173
   upload-dir: ./target/test-uploads
   jwt-secret: supersecretjwtkeythatisatleast256bitslongfortaskmanagementsystem2026

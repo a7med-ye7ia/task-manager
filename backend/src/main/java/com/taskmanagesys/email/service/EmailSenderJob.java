@@ -82,7 +82,7 @@ public class EmailSenderJob {
 
             if (attempts >= 5) {
                 email.setStatus(EmailStatus.FAILED);
-                log.error("Email id={} permanently FAILED after {} attempts: {}", email.getId(), attempts, ex.getMessage());
+                log.error("Email id={} permanently FAILED after {} attempts: {}", email.getId(), attempts, failureReason(ex));
             } else {
                 long delayMinutes = switch (attempts) {
                     case 1 -> 1;
@@ -92,10 +92,25 @@ public class EmailSenderJob {
                 };
                 email.setNextAttemptAt(Instant.now().plus(delayMinutes, ChronoUnit.MINUTES));
                 log.warn("Email id={} failed (attempt {}), next retry in {} min(s): {}",
-                        email.getId(), attempts, delayMinutes, ex.getMessage());
+                        email.getId(), attempts, delayMinutes, failureReason(ex));
             }
             emailOutboxRepository.save(email);
         }
+    }
+
+    private String failureReason(Exception ex) {
+        StringBuilder details = new StringBuilder();
+        for (Throwable current = ex; current != null; current = current.getCause()) {
+            details.append(' ').append(current.toString());
+        }
+        String text = details.toString().toLowerCase();
+        if (text.contains("authentication") || text.contains("535") || text.contains("auth fail")) {
+            return "SMTP authentication failed: check the Gmail App Password";
+        }
+        if (text.contains("connect") || text.contains("timeout") || text.contains("refused")) {
+            return "SMTP connection failed: check the host, port and network";
+        }
+        return "SMTP delivery failed";
     }
 
     private EmailContent buildContent(String template, Map<String, Object> payload) {

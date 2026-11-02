@@ -206,3 +206,7 @@ Step 3: frontend tests were added/updated without execution, and the production 
 ## Unread-state test follow-up (done)
 
 Done: confirmed the service correctly excludes the current user's own comments and uses the user/task-scoped unseen-mention query. Updated the stale Mockito fixtures and corrected the batched-count expectation for a second task containing another user's comment. Added real-database coverage for own comments, other-user comments, per-user/per-task mentions, and batched counts. Updated App tests to use the request helper's text-body response shape and to await the actual loader/page/error states. Maven and Vitest were not run.
+
+## Switchable SMTP mail modes (done)
+
+Done: SMTP settings are environment-driven with a Mailpit block enabled by default and a commented Gmail/App Password block in `.env.example`. Spring imports the root `.env` when the backend is started from `backend`; standard `SPRING_MAIL_*` variables and `APP_MAIL_FROM` are documented. Startup logs only host, port, sender and enabled state. SMTP failures are reduced to safe connection/authentication messages while retry and FAILED behavior remains unchanged. The test profile hard-locks localhost, disables SMTP and disables the sender job, with a safety test asserting those values. README documents real-Gmail setup, local links, limits, Spam checks and switching back to Mailpit. Maven, Vitest, Docker and the app were not run.

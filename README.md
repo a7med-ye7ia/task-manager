@@ -60,9 +60,22 @@ People can also sign up on their own. They confirm their email, and then a Manag
 
 ## Emails in development
 
-No real email is sent while you develop. Every message goes to Mailpit, a local inbox at http://localhost:8025. Invitation, verification and password reset links show up there.
+Mailpit is the active local mode in `.env.example`. Every message goes to the local inbox at http://localhost:8025. The backend imports `../.env` when started from `backend`, and Docker Compose also reads the root `.env`. The exact mail variables are `MAIL_ENABLED`, `SPRING_MAIL_HOST`, `SPRING_MAIL_PORT`, `SPRING_MAIL_USERNAME`, `SPRING_MAIL_PASSWORD`, `SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH`, `SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE`, `SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_REQUIRED`, `SPRING_MAIL_PROPERTIES_MAIL_SMTP_CONNECTIONTIMEOUT`, `SPRING_MAIL_PROPERTIES_MAIL_SMTP_TIMEOUT`, `SPRING_MAIL_PROPERTIES_MAIL_SMTP_WRITETIMEOUT`, and `APP_MAIL_FROM`.
+
+Invitation, verification and password reset links show up in Mailpit.
 
 To send real email through Gmail you need a Gmail App Password. The Gmail section in `.env.example` explains the settings. Use only addresses you own while testing.
+
+## Testing with real Gmail
+
+1. Enable 2-step verification on the Gmail account.
+2. Create a Gmail App Password and copy the 16-character value.
+3. In `.env`, comment the Mailpit block and uncomment the Gmail block. Fill `SPRING_MAIL_USERNAME`, `SPRING_MAIL_PASSWORD`, and `APP_MAIL_FROM` with an account you own.
+4. Set `APP_BASE_URL=http://localhost:5173`, restart the backend, and test only with email addresses you own.
+5. Check the Spam folder if a message does not arrive. A normal Gmail account has a roughly 500-message-per-day sending limit.
+6. To return to Mailpit, stop the backend, re-enable the Mailpit block, comment the Gmail block, and restart. Use http://localhost:8025 to inspect messages again.
+
+The test profile always forces `spring.mail.host=localhost`, `app.mail.enabled=false`, and `app.email.sender.enabled=false`; environment variables and `.env` cannot make tests send real email. Email links are built from `APP_BASE_URL`, and templates never include passwords or the full task description.
 
 ## Tests
 

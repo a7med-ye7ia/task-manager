@@ -18,6 +18,6 @@ app:
     secure: true
   mail:
     enabled: ${MAIL_ENABLED:true}
-    from: ${MAIL_FROM}
-    from-name: ${MAIL_FROM_NAME}
+    from: ${APP_MAIL_FROM:${SPRING_MAIL_USERNAME}}
+    from-name: Task Manager
     reply-to: ${MAIL_REPLY_TO:}

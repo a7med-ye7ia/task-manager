@@ -4,7 +4,5 @@ spring:
       on-profile: dev
 
 app:
-  mail:
-    enabled: false
   cookie:
     secure: false
