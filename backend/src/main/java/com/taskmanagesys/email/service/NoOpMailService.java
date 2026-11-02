@@ -14,4 +14,9 @@ public class NoOpMailService implements MailService {
     public void send(Message message) {
         log.info("Mail delivery disabled; skipped template message to recipient hash={}", Integer.toHexString(message.to().hashCode()));
     }
+
+    @Override
+    public boolean isRemoteDelivery() {
+        return false;
+    }
 }

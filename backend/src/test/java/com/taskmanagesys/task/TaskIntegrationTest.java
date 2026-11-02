@@ -363,8 +363,8 @@ public class TaskIntegrationTest {
         Long taskA = createPermissionTask();
         Long taskB = createPermissionTask();
         String ownComment = "{\"body\":\"My own comment\"}";
-        String mentionCurrent = "{\"body\":\"Mention Bob\",\"mentionedUserIds\":[" + employee1.getId() + "]}";
-        String mentionOther = "{\"body\":\"Mention Charlie\",\"mentionedUserIds\":[" + employee2.getId() + "]}";
+        String mentionCurrent = "{\"body\":\"Mention @Bob Worker\",\"mentionedUserIds\":[" + employee1.getId() + "]}";
+        String mentionOther = "{\"body\":\"Mention @Charlie Helper\",\"mentionedUserIds\":[" + employee2.getId() + "]}";
         mockMvc.perform(post("/api/tasks/" + taskA + "/comments").header("Authorization", "Bearer " + employeeToken).contentType(MediaType.APPLICATION_JSON).content(ownComment)).andExpect(status().isCreated());
         mockMvc.perform(post("/api/tasks/" + taskA + "/comments").header("Authorization", "Bearer " + employee2Token).contentType(MediaType.APPLICATION_JSON).content(mentionCurrent)).andExpect(status().isCreated());
         mockMvc.perform(post("/api/tasks/" + taskA + "/comments").header("Authorization", "Bearer " + employeeToken).contentType(MediaType.APPLICATION_JSON).content(mentionOther)).andExpect(status().isCreated());
@@ -372,8 +372,8 @@ public class TaskIntegrationTest {
 
         var counts = taskReadStateService.unreadCounts(List.of(taskA, taskB), employee1.getId());
         var mentionCounts = taskReadStateService.unreadMentionCounts(List.of(taskA, taskB), employee1.getId());
-        assertEquals(2L, counts.get(taskA));
-        assertEquals(2L, counts.get(taskB));
+        assertEquals(3L, counts.get(taskA));
+        assertEquals(3L, counts.get(taskB));
         assertEquals(1L, mentionCounts.get(taskA));
         assertEquals(1L, mentionCounts.get(taskB));
     }

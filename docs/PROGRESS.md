@@ -210,3 +210,7 @@ Done: confirmed the service correctly excludes the current user's own comments a
 ## Switchable SMTP mail modes (done)
 
 Done: SMTP settings are environment-driven with a Mailpit block enabled by default and a commented Gmail/App Password block in `.env.example`. Spring imports the root `.env` when the backend is started from `backend`; standard `SPRING_MAIL_*` variables and `APP_MAIL_FROM` are documented. Startup logs only host, port, sender and enabled state. SMTP failures are reduced to safe connection/authentication messages while retry and FAILED behavior remains unchanged. The test profile hard-locks localhost, disables SMTP and disables the sender job, with a safety test asserting those values. README documents real-Gmail setup, local links, limits, Spam checks and switching back to Mailpit. Maven, Vitest, Docker and the app were not run.
+
+## Mail loading and temporary tunnel (done)
+
+Done: verified the normal backend command and current non-secret `.env` resolution (localhost:1025, the configured username, and mail disabled). The backend uses the standard optional `../.env` properties import with environment-variable precedence. Startup logging now emits one safe SMTP/app-base-URL line; disabled delivery no longer reports a no-op as SMTP-sent. Added configurable Vite allowed hosts and proxy target, preserved localhost defaults, and documented HTTPS tunnel setup, cookies, CORS, URL dependencies and real-deployment limitations in `docs/TUNNEL.md`. Maven tests and the frontend build were run as requested; results are reported separately.

@@ -73,7 +73,11 @@ public class EmailSenderJob {
             email.setStatus(EmailStatus.SENT);
             email.setLastError(null);
             emailOutboxRepository.save(email);
-            log.info("Sent email id={} template={} to={}", email.getId(), email.getTemplate(), email.getToEmail());
+            if (mailService.isRemoteDelivery()) {
+                log.info("Sent email id={} template={} to={}", email.getId(), email.getTemplate(), email.getToEmail());
+            } else {
+                log.info("Email id={} template={} skipped because mail delivery is disabled", email.getId(), email.getTemplate());
+            }
 
         } catch (Exception ex) {
             int attempts = email.getAttempts() + 1;
@@ -106,6 +110,10 @@ public class EmailSenderJob {
         String text = details.toString().toLowerCase();
         if (text.contains("authentication") || text.contains("535") || text.contains("auth fail")) {
             return "SMTP authentication failed: check the Gmail App Password";
+        }
+        if (text.contains("550") || text.contains("553") || text.contains("recipient")
+                || text.contains("mailbox unavailable") || text.contains("address rejected")) {
+            return "SMTP recipient was rejected: check the recipient address";
         }
         if (text.contains("connect") || text.contains("timeout") || text.contains("refused")) {
             return "SMTP connection failed: check the host, port and network";
