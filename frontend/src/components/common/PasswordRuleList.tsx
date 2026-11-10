@@ -33,10 +33,16 @@ export const PasswordRuleList: React.FC<PasswordRuleListProps> = ({ password }) 
       label: 'At least one number (0-9)',
       passed: /[0-9]/.test(password),
     },
+    {
+      id: 'special',
+      label: 'At least one special character',
+      passed: /[^a-zA-Z0-9]/.test(password),
+    },
   ];
 
   return (
     <div
+      data-testid="password-rule-list"
       style={{
         marginTop: '0.5rem',
         marginBottom: '0.75rem',
@@ -56,6 +62,7 @@ export const PasswordRuleList: React.FC<PasswordRuleListProps> = ({ password }) 
           return (
             <div
               key={rule.id}
+              data-testid={`rule-${rule.id}`}
               style={{
                 display: 'flex',
                 alignItems: 'center',
@@ -66,9 +73,9 @@ export const PasswordRuleList: React.FC<PasswordRuleListProps> = ({ password }) 
               }}
             >
               {rule.passed ? (
-                <Check size={14} strokeWidth={2.5} style={{ flexShrink: 0 }} />
+                <Check size={14} strokeWidth={2.5} style={{ flexShrink: 0 }} data-testid={`check-${rule.id}`} />
               ) : (
-                <X size={14} strokeWidth={2.5} style={{ flexShrink: 0 }} />
+                <X size={14} strokeWidth={2.5} style={{ flexShrink: 0 }} data-testid={`x-${rule.id}`} />
               )}
               <span>{rule.label}</span>
             </div>

@@ -63,6 +63,7 @@ public class ProfileController {
         String contentType = userService.getAvatarContentType(principal.getId());
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_TYPE, contentType)
+                .header(HttpHeaders.CACHE_CONTROL, "private, max-age=3600")
                 .body(bytes);
     }
 
@@ -75,3 +76,4 @@ public class ProfileController {
         return ResponseEntity.ok(Map.of("message", "Email preferences updated successfully."));
     }
 }
+

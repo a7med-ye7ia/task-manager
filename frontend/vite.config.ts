@@ -9,24 +9,36 @@ export default defineConfig(({ mode }) => {
   const extraHosts = (process.env.APP_ALLOWED_HOSTS || env.APP_ALLOWED_HOSTS || '')
     .split(',').map((host) => host.trim()).filter(Boolean);
   const appHost = new URL(appBaseUrl).hostname;
-  const allowedHosts = Array.from(new Set(['localhost', '127.0.0.1', appHost, ...extraHosts]));
+  const allowedHosts = Array.from(new Set(['localhost', '127.0.0.1', appHost, '.trycloudflare.com', ...extraHosts]));
 
   return {
-  plugins: [react()],
-  server: {
-    port: 5173,
-    allowedHosts,
-    proxy: {
-      '/api': {
-        target: proxyTarget,
-        changeOrigin: true,
+    plugins: [react()],
+    server: {
+      port: 5173,
+      allowedHosts,
+      proxy: {
+        '/api': {
+          target: proxyTarget,
+          changeOrigin: true,
+        },
       },
     },
-  },
-  test: {
-    globals: true,
-    environment: 'jsdom',
-    setupFiles: './src/test/setup.ts',
-  },
+    build: {
+      rollupOptions: {
+        output: {
+          manualChunks: {
+            'vendor-react': ['react', 'react-dom', 'react-router-dom'],
+            'vendor-query': ['@tanstack/react-query'],
+            'vendor-icons': ['lucide-react'],
+          },
+        },
+      },
+      chunkSizeWarningLimit: 600,
+    },
+    test: {
+      globals: true,
+      environment: 'jsdom',
+      setupFiles: './src/test/setup.ts',
+    },
   };
 });

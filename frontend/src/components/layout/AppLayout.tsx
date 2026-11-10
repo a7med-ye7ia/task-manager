@@ -18,14 +18,14 @@ import { UserAvatar } from "../avatar/UserAvatar";
 import { Button } from "../common/Button";
 import { ConfirmDialog } from "../common/ConfirmDialog";
 import {
-  AlertCircle,
   Bell,
   BellOff,
   ClipboardList,
   LogOut,
-  X,
 } from "lucide-react";
 import { PageLoader, RequestError } from "../common/LoadingStates";
+import { ErrorNotice } from "../common/ErrorNotice";
+import { TimerChip } from "../common/TimerChip";
 
 export const TaskNavbarChatContext = createContext<React.Dispatch<
   React.SetStateAction<React.ReactNode | null>
@@ -45,6 +45,11 @@ export const AppLayout: React.FC = () => {
   const [clearingNotifications, setClearingNotifications] = useState(false);
   const [signOutConfirmOpen, setSignOutConfirmOpen] = useState(false);
   const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [runningTimeSession, setRunningTimeSession] = useState<{ id: number; taskId: number; taskTitle: string; startedAt: string; state?: 'RUNNING' | 'PAUSED' | 'ENDED'; workedSeconds?: number; durationSeconds?: number } | null>(() => {
+    try { return JSON.parse(localStorage.getItem("runningTimeSession") || "null"); } catch { return null; }
+  });
+  const [timerReceivedAt, setTimerReceivedAt] = useState(() => Date.now());
+  const [timerError] = useState('');
   const notificationWrapperRef = useRef<HTMLDivElement>(null);
   const loadNotifications = async () => {
     if (!isAuthenticated) return;
@@ -62,7 +67,11 @@ export const AppLayout: React.FC = () => {
   };
   useEffect(() => {
     void loadNotifications();
-    const timer = window.setInterval(loadNotifications, 30000);
+    const timer = window.setInterval(() => {
+      if (!document.hidden) {
+        void loadNotifications();
+      }
+    }, 30000);
     return () => window.clearInterval(timer);
   }, [isAuthenticated]);
   useEffect(() => {
@@ -90,6 +99,11 @@ export const AppLayout: React.FC = () => {
     setNotificationsOpen(false);
     setNotificationError("");
   }, [location.pathname, location.search]);
+  useEffect(() => {
+    const update = () => { try { setRunningTimeSession(JSON.parse(localStorage.getItem("runningTimeSession") || "null")); setTimerReceivedAt(Date.now()); } catch { setRunningTimeSession(null); } };
+    window.addEventListener("time-session-changed", update);
+    return () => window.removeEventListener("time-session-changed", update);
+  }, []);
 
   const handleLogout = async () => {
     await logout();
@@ -205,6 +219,16 @@ export const AppLayout: React.FC = () => {
                   Profile
                 </NavLink>
               )}
+              {isAuthenticated && (
+                <NavLink
+                  to="/my-time"
+                  className={({ isActive }) =>
+                    `nav-link ${isActive ? "active" : ""}`
+                  }
+                >
+                  Attendance
+                </NavLink>
+              )}
             </nav>
             <div
               className="header-actions"
@@ -218,43 +242,23 @@ export const AppLayout: React.FC = () => {
                     gap: "0.85rem",
                   }}
                 >
-                  <Link
-                    to="/profile"
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: "0.65rem",
-                      textDecoration: "none",
-                      color: "inherit",
-                    }}
-                  >
-                    <UserAvatar
-                      userId={user.id}
-                      avatarPath={user.avatarPath}
-                      firstName={user.firstName}
-                      lastName={user.lastName}
-                      size={36}
+                  
+                  {runningTimeSession &&
+                  (runningTimeSession.state === "RUNNING" ||
+                    runningTimeSession.state === "PAUSED") && (
+                    <TimerChip
+                      taskId={runningTimeSession.taskId}
+                      taskTitle={runningTimeSession.taskTitle}
+                      state={runningTimeSession.state}
+                      workedSeconds={
+                        runningTimeSession.workedSeconds ??
+                        runningTimeSession.durationSeconds ??
+                        0
+                      }
+                      receivedAt={timerReceivedAt}
+                      error={timerError}
                     />
-                    <div
-                      style={{
-                        display: "flex",
-                        flexDirection: "column",
-                        fontSize: "0.85rem",
-                        lineHeight: 1.2,
-                      }}
-                    >
-                      <span style={{ fontWeight: 600 }}>{user.firstName}</span>
-                      <span
-                        style={{
-                          fontSize: "0.7rem",
-                          color: "var(--text-muted)",
-                        }}
-                      >
-                        {user.role}
-                      </span>
-                    </div>
-                  </Link>
-
+                  )}
                   {chatSlot}
                   <div
                     ref={notificationWrapperRef}
@@ -336,23 +340,21 @@ export const AppLayout: React.FC = () => {
                           )}
                         </div>
                         {notificationError && notifications.length > 0 && (
-                          <div
-                            className="notification-inline-error"
-                            role="alert"
-                          >
-                            <AlertCircle size={16} aria-hidden="true" />
-                            <span>{notificationError}</span>
-                            <button type="button" className="request-error-retry" onClick={() => void loadNotifications()}>Try again</button>
-                            <button
-                              type="button"
-                              aria-label="Dismiss notification error"
-                              onClick={() => setNotificationError("")}
-                            >
-                              <X size={14} />
-                            </button>
-                          </div>
+                          <ErrorNotice
+                            error={notificationError}
+                            compact
+                            onRetry={() => void loadNotifications()}
+                            onDismiss={() => setNotificationError("")}
+                          />
                         )}
-                        {notificationsLoading && notifications.length === 0 ? <PageLoader label="Loading notifications" /> : notificationError && notifications.length === 0 ? <RequestError message={notificationError} onRetry={() => void loadNotifications()} /> : notifications.length === 0 ? (
+                        {notificationsLoading && notifications.length === 0 ? (
+                          <PageLoader label="Loading notifications" />
+                        ) : notificationError && notifications.length === 0 ? (
+                          <RequestError
+                            message={notificationError}
+                            onRetry={() => void loadNotifications()}
+                          />
+                        ) : notifications.length === 0 ? (
                           <div className="notification-empty-state">
                             <BellOff size={28} aria-hidden="true" />
                             <span>No notifications</span>
@@ -392,19 +394,47 @@ export const AppLayout: React.FC = () => {
                   >
                     <span className="desktop-only">Sign Out</span>
                   </Button>
+                  <Link
+                    to="/profile"
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "0.65rem",
+                      textDecoration: "none",
+                      color: "inherit",
+                    }}
+                  >
+                    <UserAvatar
+                      userId={user.id}
+                      avatarPath={user.avatarPath}
+                      firstName={user.firstName}
+                      lastName={user.lastName}
+                      size={36}
+                    />
+                    <div
+                      style={{
+                        display: "flex",
+                        flexDirection: "column",
+                        fontSize: "0.85rem",
+                        lineHeight: 1.2,
+                      }}
+                    >
+                      <span style={{ fontWeight: 600 }}>{user.firstName}</span>
+                      <span
+                        style={{
+                          fontSize: "0.7rem",
+                          color: "var(--text-muted)",
+                        }}
+                      >
+                        {user.role}
+                      </span>
+                    </div>
+                  </Link>
                 </div>
               ) : (
                 <div style={{ display: "flex", gap: "0.65rem" }}>
-                  <Link to="/login">
-                    <Button variant="outline" size="sm">
-                      Sign In
-                    </Button>
-                  </Link>
-                  <Link to="/signup">
-                    <Button variant="primary" size="sm">
-                      Sign Up
-                    </Button>
-                  </Link>
+                  <Link to="/login" className="btn btn-outline" style={{ height: "36px", padding: "0 0.85rem", fontSize: "0.8rem", borderRadius: "10px" }}>Sign In</Link>
+                  <Link to="/signup" className="btn btn-primary" style={{ height: "36px", padding: "0 0.85rem", fontSize: "0.8rem", borderRadius: "10px" }}>Sign Up</Link>
                 </div>
               )}
             </div>

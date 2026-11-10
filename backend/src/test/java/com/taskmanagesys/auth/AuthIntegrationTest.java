@@ -23,6 +23,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.MvcResult;
 
@@ -33,13 +34,52 @@ import java.util.List;
 import static org.hamcrest.Matchers.*;
 import static org.junit.jupiter.api.Assertions.*;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.options;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.*;
 
 @SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
+@TestPropertySource(properties = "CORS_ALLOWED_ORIGINS=https://allowed.example")
 class AuthIntegrationTest {
+
+    private static final String APP_ORIGIN = "http://localhost:5173";
+
+    @Test
+    void corsPreflightForAppOriginIsAcceptedBeforeAuthentication() throws Exception {
+        mockMvc.perform(options("/api/auth/login")
+                        .header("Origin", APP_ORIGIN)
+                        .header("Access-Control-Request-Method", "POST"))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Access-Control-Allow-Origin", APP_ORIGIN));
+    }
+
+    @Test
+    void loginFromConfiguredOriginsIsAcceptedAndUnrelatedOriginIsRejected() throws Exception {
+        LoginRequest request = new LoginRequest("manager@gmail.com", "Manager123!");
+        String body = objectMapper.writeValueAsString(request);
+
+        mockMvc.perform(post("/api/auth/login")
+                        .header("Origin", APP_ORIGIN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Access-Control-Allow-Origin", APP_ORIGIN));
+
+        mockMvc.perform(post("/api/auth/login")
+                        .header("Origin", "https://allowed.example")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(header().string("Access-Control-Allow-Origin", "https://allowed.example"));
+
+        mockMvc.perform(post("/api/auth/login")
+                        .header("Origin", "https://unrelated.example")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isForbidden());
+    }
 
     @Autowired
     private MockMvc mockMvc;

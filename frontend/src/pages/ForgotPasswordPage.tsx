@@ -4,7 +4,8 @@ import { forgotPasswordApi, ApiError } from '../services/api';
 import { Card } from '../components/common/Card';
 import { Button } from '../components/common/Button';
 import { Input } from '../components/common/Input';
-import { Mail, ArrowLeft, AlertCircle } from 'lucide-react';
+import { Mail, ArrowLeft } from 'lucide-react';
+import { ErrorNotice } from '../components/common/ErrorNotice';
 
 export const ForgotPasswordPage: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -64,10 +65,8 @@ export const ForgotPasswordPage: React.FC = () => {
             <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', lineHeight: 1.5, marginBottom: '1.75rem' }}>
               If an active account exists with this address, a reset link has been sent. It expires in 30 minutes.
             </p>
-            <Link to="/login">
-              <Button variant="primary" size="md" style={{ width: '100%' }}>
-                Back to Sign In
-              </Button>
+            <Link to="/login" className="btn btn-primary" style={{ width: '100%', height: 'var(--input-height)', padding: '0 1.25rem', fontSize: '0.9rem', borderRadius: 'var(--radius-button)' }}>
+              Back to Sign In
             </Link>
           </div>
         ) : (
@@ -86,8 +85,7 @@ export const ForgotPasswordPage: React.FC = () => {
                   gap: '0.5rem',
                 }}
               >
-                <AlertCircle size={18} style={{ flexShrink: 0 }} />
-                <span>{error}</span>
+                <ErrorNotice error={error} />
               </div>
             )}
 

@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { verifyEmailApi, ApiError } from '../services/api';
 import { Card } from '../components/common/Card';
-import { Button } from '../components/common/Button';
 import { CheckCircle2, XCircle } from 'lucide-react';
 import { PageLoader } from '../components/common/LoadingStates';
 
@@ -67,10 +66,8 @@ export const VerifyEmailPage: React.FC = () => {
             <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem', lineHeight: 1.5, marginBottom: '1.75rem' }}>
               {successMessage}
             </p>
-            <Link to="/login">
-              <Button variant="primary" size="md" style={{ width: '100%' }}>
-                Go to Sign In
-              </Button>
+            <Link to="/login" className="btn btn-primary" style={{ width: '100%', height: 'var(--input-height)', padding: '0 1.25rem', fontSize: '0.9rem', borderRadius: 'var(--radius-button)' }}>
+              Go to Sign In
             </Link>
           </div>
         ) : (
@@ -96,10 +93,8 @@ export const VerifyEmailPage: React.FC = () => {
             <p style={{ color: 'var(--text-muted)', fontSize: '0.95rem', lineHeight: 1.5, marginBottom: '1.75rem' }}>
               {errorMessage}
             </p>
-            <Link to="/login">
-              <Button variant="primary" size="md" style={{ width: '100%' }}>
-                Return to Sign In
-              </Button>
+            <Link to="/login" className="btn btn-primary" style={{ width: '100%', height: 'var(--input-height)', padding: '0 1.25rem', fontSize: '0.9rem', borderRadius: 'var(--radius-button)' }}>
+              Return to Sign In
             </Link>
           </div>
         )}

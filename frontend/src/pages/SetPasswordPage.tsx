@@ -5,7 +5,8 @@ import { Card } from '../components/common/Card';
 import { Button } from '../components/common/Button';
 import { PasswordInput } from '../components/common/PasswordInput';
 import { PasswordRuleList } from '../components/common/PasswordRuleList';
-import { CheckCircle2, AlertCircle } from 'lucide-react';
+import { CheckCircle2 } from 'lucide-react';
+import { ErrorNotice } from '../components/common/ErrorNotice';
 
 export const SetPasswordPage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -33,9 +34,10 @@ export const SetPasswordPage: React.FC = () => {
     } else if (
       !/[A-Z]/.test(password) ||
       !/[a-z]/.test(password) ||
-      !/[0-9]/.test(password)
+      !/[0-9]/.test(password) ||
+      !/[^a-zA-Z0-9]/.test(password)
     ) {
-      errors.password = 'Password must include uppercase, lowercase, and a number';
+      errors.password = 'Password must include uppercase, lowercase, a number, and a special character';
     }
 
     if (password !== confirmPassword) {
@@ -109,10 +111,8 @@ export const SetPasswordPage: React.FC = () => {
             <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', lineHeight: 1.5, marginBottom: '1.75rem' }}>
               Your password has been successfully set. You can now sign in to your workspace.
             </p>
-            <Link to="/login">
-              <Button variant="primary" size="md" style={{ width: '100%' }}>
-                Sign In
-              </Button>
+            <Link to="/login" className="btn btn-primary" style={{ width: '100%', height: 'var(--input-height)', padding: '0 1.25rem', fontSize: '0.9rem', borderRadius: 'var(--radius-button)' }}>
+              Sign In
             </Link>
           </div>
         ) : (
@@ -131,8 +131,7 @@ export const SetPasswordPage: React.FC = () => {
                   gap: '0.5rem',
                 }}
               >
-                <AlertCircle size={18} style={{ flexShrink: 0 }} />
-                <span>{generalError}</span>
+                <ErrorNotice error={generalError} />
               </div>
             )}
 

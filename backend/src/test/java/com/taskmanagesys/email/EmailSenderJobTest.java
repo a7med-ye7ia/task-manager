@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.taskmanagesys.email.model.EmailOutbox;
 import com.taskmanagesys.email.repository.EmailOutboxRepository;
 import com.taskmanagesys.email.service.EmailSenderJob;
+import com.taskmanagesys.email.service.EmailTemplateRenderer;
 import com.taskmanagesys.email.service.MailService;
 import org.junit.jupiter.api.Test;
 
@@ -20,7 +21,8 @@ class EmailSenderJobTest {
         EmailOutboxRepository repository = mock(EmailOutboxRepository.class);
         MailService mailService = mock(MailService.class);
         ObjectMapper mapper = new ObjectMapper();
-        EmailSenderJob job = new EmailSenderJob(repository, mailService, mapper);
+        EmailTemplateRenderer renderer = mock(EmailTemplateRenderer.class);
+        EmailSenderJob job = new EmailSenderJob(repository, mailService, mapper, renderer);
         EmailOutbox outbox = new EmailOutbox("employee@example.com", "UNKNOWN", mapper.writeValueAsString(Map.of()));
         doThrow(new IllegalStateException("connection refused")).when(mailService).send(any());
 

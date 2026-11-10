@@ -1,13 +1,16 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { CalendarDays, FileText, Plus, Trash2 } from "lucide-react";
 import { Modal } from "../common/Modal";
 import { Button } from "../common/Button";
 import { Input } from "../common/Input";
 import { Select } from "../common/Select";
 import { PeoplePicker } from "../common/PeoplePicker";
 import { FieldError } from "../common/FieldError";
-import { RemoveButton } from "../common/RemoveButton";
+import { ErrorNotice } from "../common/ErrorNotice";
 import { User, Task, TaskPriority } from "../../types";
+import { CalendarDays, FileText, Plus, Trash2 } from "lucide-react";
+import { FileDropzone } from "./FileDropzone";
+import { useAuth } from "../../context/AuthContext";
+import { IconButton } from "../common/IconButton";
 
 export const TaskFormModal: React.FC<{
   task?: Task | null;
@@ -15,6 +18,7 @@ export const TaskFormModal: React.FC<{
   onClose: () => void;
   onSave: (data: any) => Promise<void>;
 }> = ({ task, users, onClose, onSave }) => {
+  const { isManager, user: currentUser } = useAuth();
   const [form, setForm] = useState({
     title: "",
     description: "",
@@ -33,9 +37,11 @@ export const TaskFormModal: React.FC<{
       description: string;
       deadline: string;
       assigneeUserIds: number[];
+      files: File[];
     }[]
   >([]);
   const [checkpoints, setCheckpoints] = useState<string[]>([]);
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [noChanges, setNoChanges] = useState(false);
 
   // The "nothing changed" message stays until the user edits something.
@@ -63,8 +69,25 @@ export const TaskFormModal: React.FC<{
         memberUserIds: task.members.map((m) => m.user.id),
         leadUserId: task.lead?.id,
       });
+    } else if (!isManager && currentUser) {
+      setForm((prev) => ({
+        ...prev,
+        memberUserIds: [currentUser.id],
+        leadUserId: currentUser.id,
+      }));
     }
-  }, [task]);
+  }, [task, isManager, currentUser]);
+
+  const setMembers = (ids: number[]) => {
+    setForm((current) => {
+      const nextLead =
+        current.leadUserId && ids.includes(current.leadUserId)
+          ? current.leadUserId
+          : undefined;
+      return { ...current, memberUserIds: ids, leadUserId: nextLead };
+    });
+    clearFieldError("members");
+  };
 
   const clearFieldError = (key: string) => {
     setFieldErrors((current) => {
@@ -86,8 +109,13 @@ export const TaskFormModal: React.FC<{
       else if (title.length > 150)
         next.title = "Task title cannot exceed 150 characters.";
     }
-    if (key === "deadline" && !subtasks.length && !form.deadline)
-      next.deadline = "Choose a deadline.";
+    if (key === "deadline") {
+      if (!isManager && !form.deadline) {
+        next.deadline = "Task deadline is required.";
+      } else if (!subtasks.length && !form.deadline) {
+        next.deadline = "Choose a deadline.";
+      }
+    }
     const match = key.match(/^subtask-(title|deadline|assignees)-(\d+)$/);
     if (match) {
       const subtask = subtasks[Number(match[2])];
@@ -95,7 +123,11 @@ export const TaskFormModal: React.FC<{
         next[key] = "Subtask title is required.";
       if (match[1] === "deadline" && !subtask.deadline)
         next[key] = "Choose a deadline for this subtask.";
-      if (match[1] === "assignees" && !subtask.assigneeUserIds.length)
+      if (
+        match[1] === "assignees" &&
+        isManager &&
+        !subtask.assigneeUserIds.length
+      )
         next[key] = "Select at least one assignee.";
     }
     const checkpoint = key.match(/^checkpoint-(\d+)$/);
@@ -110,7 +142,6 @@ export const TaskFormModal: React.FC<{
 
   const showErrors = (nextErrors: Record<string, string>) => {
     setFieldErrors(nextErrors);
-    // The members picker is collapsed by default, so open it to show its error.
     if (nextErrors.members) setShowTeamMembers(true);
     const first = Object.keys(nextErrors)[0];
     window.setTimeout(
@@ -126,18 +157,21 @@ export const TaskFormModal: React.FC<{
 
     if (form.title.trim().length < 3 || form.title.trim().length > 150)
       nextErrors.title = "Task title must be between 3 and 150 characters.";
-    if (!task && !form.memberUserIds.length)
+    if (!task && isManager && !form.memberUserIds.length)
       nextErrors.members = "Select at least one team member.";
-    if (!task && !subtasks.length && !form.deadline)
+    if (!task && !isManager && !form.deadline)
+      nextErrors.deadline = "Task deadline is required.";
+    else if (!task && !subtasks.length && !form.deadline)
       nextErrors.deadline =
         "Choose a deadline or add a subtask with a deadline.";
+
     subtasks.forEach((subtask, index) => {
       if (!subtask.title.trim())
         nextErrors[`subtask-title-${index}`] = "Subtask title is required.";
       if (!subtask.deadline)
         nextErrors[`subtask-deadline-${index}`] =
           "Choose a deadline for this subtask.";
-      if (!subtask.assigneeUserIds.length)
+      if (isManager && !subtask.assigneeUserIds.length)
         nextErrors[`subtask-assignees-${index}`] =
           "Select at least one assignee.";
     });
@@ -168,15 +202,41 @@ export const TaskFormModal: React.FC<{
     try {
       await onSave({
         ...form,
+        selfReported: !isManager ? true : undefined,
+        memberUserIds: !isManager
+          ? currentUser
+            ? [currentUser.id]
+            : []
+          : form.memberUserIds,
+        leadUserId: !isManager ? currentUser?.id : form.leadUserId,
         deadline:
           latestSubtaskDeadline &&
           (!form.deadline || form.deadline < latestSubtaskDeadline)
             ? latestSubtaskDeadline
             : form.deadline,
-        subtasks: task ? undefined : subtasks,
+        subtasks: task
+          ? undefined
+          : subtasks.map((s) => ({
+              title: s.title,
+              description: s.description,
+              deadline: s.deadline,
+              assigneeUserIds: !isManager
+                ? currentUser
+                  ? [currentUser.id]
+                  : []
+                : s.assigneeUserIds,
+            })),
+        subtaskFiles: task
+          ? undefined
+          : subtasks.map((s) => ({
+              title: s.title,
+              deadline: s.deadline,
+              files: s.files,
+            })),
         checkpoints: task
           ? undefined
           : checkpoints.filter(Boolean).map((title) => ({ title })),
+        files: pendingFiles,
       });
       onClose();
     } catch (e: any) {
@@ -201,25 +261,14 @@ export const TaskFormModal: React.FC<{
       if (Object.keys(mapped).length) showErrors(mapped);
       else
         setError(
-          e.status === 403
-            ? "You do not have permission to save this task."
-            : "The task could not be saved. Please try again.",
+          e?.message ||
+            (e.status === 403
+              ? "You do not have permission to save this task."
+              : "The task could not be saved. Please try again."),
         );
     } finally {
       setSaving(false);
     }
-  };
-
-  const setMembers = (memberUserIds: number[]) => {
-    setForm((current) => ({
-      ...current,
-      memberUserIds,
-      leadUserId:
-        current.leadUserId && !memberUserIds.includes(current.leadUserId)
-          ? undefined
-          : current.leadUserId,
-    }));
-    clearFieldError("members");
   };
 
   return (
@@ -252,7 +301,6 @@ export const TaskFormModal: React.FC<{
             placeholder="Enter task title"
           />
         </div>
-
         <label className="field-label">
           <h3>Description</h3>
           <textarea
@@ -273,9 +321,7 @@ export const TaskFormModal: React.FC<{
           }}
         >
           <div style={{ display: "grid" }}>
-            <h3 style={{ margin: 0 }}>
-               Deadline
-            </h3>
+            <h3 style={{ margin: 0 }}>Deadline</h3>
             <Input
               label=""
               icon={<CalendarDays size={17} />}
@@ -294,7 +340,7 @@ export const TaskFormModal: React.FC<{
               }}
               onBlur={() => validateField("deadline")}
               error={fieldErrors.deadline}
-              required={!subtasks.length}
+              required={!isManager || !subtasks.length}
             />
           </div>
           <label className="field-label">
@@ -316,6 +362,114 @@ export const TaskFormModal: React.FC<{
 
         {!task && (
           <>
+            {isManager && (
+              <section style={{ display: "grid", gap: ".6rem" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: ".75rem",
+                  }}
+                >
+                  <h3>Team members</h3>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    icon={<Plus size={15} />}
+                    onClick={() => setShowTeamMembers((show) => !show)}
+                  >
+                    {showTeamMembers ? "Hide members" : "Add members"}
+                  </Button>
+                </div>
+
+                {showTeamMembers && (
+                  <div
+                    style={{
+                      display: "grid",
+                      gap: ".75rem",
+                      padding: ".75rem",
+                      border: "1px solid var(--border-light)",
+                      borderRadius: 12,
+                    }}
+                  >
+                    <PeoplePicker
+                      label="Select team members"
+                      users={users}
+                      value={form.memberUserIds}
+                      onChange={setMembers}
+                      leadUserId={form.leadUserId}
+                      error={fieldErrors.members}
+                    />
+
+                    <label className="field-label">
+                      Lead
+                      <Select
+                        value={form.leadUserId?.toString() || "NONE"}
+                        onValueChange={(value) =>
+                          setForm((current) => ({
+                            ...current,
+                            leadUserId:
+                              value === "NONE" ? undefined : Number(value),
+                          }))
+                        }
+                        options={[
+                          { value: "NONE", label: "No lead" },
+                          ...users
+                            .filter((u) => form.memberUserIds.includes(u.id))
+                            .map((u) => ({
+                              value: String(u.id),
+                              label: `${u.firstName} ${u.lastName}`,
+                            })),
+                        ]}
+                        ariaLabel="Lead"
+                      />
+                    </label>
+                  </div>
+                )}
+
+                {!showTeamMembers && form.memberUserIds.length > 0 && (
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: ".5rem",
+                      alignItems: "center",
+                    }}
+                  >
+                    {form.memberUserIds.map((memberId) => {
+                      const member = users.find((user) => user.id === memberId);
+                      if (!member) return null;
+                      const isLead = memberId === form.leadUserId;
+                      return (
+                        <span
+                          key={memberId}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: ".35rem",
+                            padding: ".35rem .7rem",
+                            borderRadius: 999,
+                            border: "1px solid var(--primary)",
+                            background: isLead
+                              ? "var(--primary-light)"
+                              : "var(--surface, #f8fafc)",
+                            color: "var(--primary)",
+                            fontSize: isLead ? ".92rem" : ".82rem",
+                            fontWeight: isLead ? 600 : 400,
+                          }}
+                          title={isLead ? "Team lead" : undefined}
+                        >
+                          {member.firstName} {member.lastName}
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            )}
+
             <section style={{ display: "grid", gap: ".6rem" }}>
               <div
                 style={{
@@ -338,7 +492,10 @@ export const TaskFormModal: React.FC<{
                         title: "",
                         description: "",
                         deadline: "",
-                        assigneeUserIds: [],
+                        assigneeUserIds:
+                          !isManager && currentUser ? [currentUser.id] : [],
+                        files: [],
+                        showFiles: false,
                       },
                     ])
                   }
@@ -379,10 +536,12 @@ export const TaskFormModal: React.FC<{
                         error={fieldErrors[`subtask-title-${index}`]}
                       />
                     </div>
-                    <RemoveButton
-                      type="button"
-                      variant="ghost"
-                      aria-label="Remove subtask"
+                    <IconButton
+                      data-action="delete"
+                      aria-label="Remove Subtask"
+                      title="Remove Subtask"
+                      motion="delete"
+                      icon={<Trash2 size={16} />}
                       onClick={() => {
                         setSubtasks((items) =>
                           items.filter((_, i) => i !== index),
@@ -406,12 +565,11 @@ export const TaskFormModal: React.FC<{
                           return next;
                         });
                       }}
-                    >
-                      <Trash2 size={16} />
-                    </RemoveButton>
+                    />
                   </div>
                   <textarea
                     className="form-input"
+                    style={{ alignContent: "center" }}
                     placeholder="Optional description"
                     value={subtask.description}
                     onChange={(e) =>
@@ -445,23 +603,41 @@ export const TaskFormModal: React.FC<{
                       error={fieldErrors[`subtask-deadline-${index}`]}
                     />
                   </div>
-                  <div>
-                    <PeoplePicker
-                      label="Assignees"
-                      users={users}
-                      value={subtask.assigneeUserIds}
-                      onChange={(ids) => {
-                        setSubtasks((items) =>
-                          items.map((item, i) =>
-                            i === index
-                              ? { ...item, assigneeUserIds: ids }
-                              : item,
-                          ),
-                        );
-                        clearFieldError(`subtask-assignees-${index}`);
-                      }}
-                      error={fieldErrors[`subtask-assignees-${index}`]}
-                    />
+                  {isManager && (
+                    <div>
+                      <PeoplePicker
+                        label="Assignees"
+                        users={users}
+                        value={subtask.assigneeUserIds}
+                        onChange={(ids) => {
+                          setSubtasks((items) =>
+                            items.map((item, i) =>
+                              i === index
+                                ? { ...item, assigneeUserIds: ids }
+                                : item,
+                            ),
+                          );
+                          clearFieldError(`subtask-assignees-${index}`);
+                        }}
+                        error={fieldErrors[`subtask-assignees-${index}`]}
+                      />
+                    </div>
+                  )}
+                  <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                    <div style={{ marginTop: ".25rem" }}>
+                      <FileDropzone
+                        buttonMode
+                        target="pending"
+                        pendingFiles={subtask.files}
+                        onPendingFilesChange={(files) =>
+                          setSubtasks((items) =>
+                            items.map((item, i) =>
+                              i === index ? { ...item, files } : item,
+                            ),
+                          )
+                        }
+                      />
+                    </div>
                   </div>
                 </div>
               ))}
@@ -493,7 +669,7 @@ export const TaskFormModal: React.FC<{
                   style={{
                     display: "flex",
                     gap: ".5rem",
-                    alignItems: "flex-start",
+                    alignItems: "center",
                   }}
                 >
                   <div style={{ flex: 1 }}>
@@ -515,130 +691,32 @@ export const TaskFormModal: React.FC<{
                       error={fieldErrors[`checkpoint-${index}`]}
                     />
                   </div>
-                  <RemoveButton
-                    type="button"
-                    variant="ghost"
-                    aria-label="Remove checkpoint"
+                  <IconButton
+                    data-action="delete"
+                    aria-label="Remove Checkpoint"
+                    title="Remove Checkpoint"
+                    motion="delete"
+                    icon={<Trash2 size={20} />}
                     onClick={() =>
                       setCheckpoints((items) =>
                         items.filter((_, i) => i !== index),
                       )
                     }
-                  >
-                    <Trash2 size={16} />
-                  </RemoveButton>
+                  />
                 </div>
               ))}
             </section>
 
-            <section style={{ display: "grid", gap: ".6rem" }}>
-              <div
-                style={{
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                  gap: ".75rem",
-                }}
-              >
-                <h3>Team members</h3>
+            <section className="files-section">
+  <h3 style={{ margin: 0 }}>Files</h3>
 
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  icon={<Plus size={15} />}
-                  onClick={() => setShowTeamMembers((show) => !show)}
-                >
-                  {showTeamMembers ? "Hide members" : "Add members"}
-                </Button>
-              </div>
-
-              {showTeamMembers && (
-                <div
-                  style={{
-                    display: "grid",
-                    gap: ".75rem",
-                    padding: ".75rem",
-                    border: "1px solid var(--border-light)",
-                    borderRadius: 12,
-                  }}
-                >
-                  <PeoplePicker
-                    label="Select team members"
-                    users={users}
-                    value={form.memberUserIds}
-                    onChange={setMembers}
-                    leadUserId={form.leadUserId}
-                    error={fieldErrors.members}
-                  />
-
-                  <label className="field-label">
-                    Lead
-                    <Select
-                      value={form.leadUserId?.toString() || "NONE"}
-                      onValueChange={(value) =>
-                        setForm((current) => ({
-                          ...current,
-                          leadUserId:
-                            value === "NONE" ? undefined : Number(value),
-                        }))
-                      }
-                      options={[
-                        { value: "NONE", label: "No lead" },
-                        ...users
-                          .filter((u) => form.memberUserIds.includes(u.id))
-                          .map((u) => ({
-                            value: String(u.id),
-                            label: `${u.firstName} ${u.lastName}`,
-                          })),
-                      ]}
-                      ariaLabel="Lead"
-                    />
-                  </label>
-                </div>
-              )}
-
-              {!showTeamMembers && form.memberUserIds.length > 0 && (
-                <div
-                  style={{
-                    display: "flex",
-                    flexWrap: "wrap",
-                    gap: ".5rem",
-                    alignItems: "center",
-                  }}
-                >
-                  {form.memberUserIds.map((memberId) => {
-                    const member = users.find((user) => user.id === memberId);
-                    if (!member) return null;
-
-                    const isLead = memberId === form.leadUserId;
-
-                    return (
-                      <span
-                        key={memberId}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: ".35rem",
-                          padding: ".35rem .7rem",
-                          borderRadius: 999,
-                          border: "1px solid var(--primary)",
-                          background: isLead
-                            ? "var(--primary-light)"
-                            : "var(--surface, #f8fafc)",
-                          color: "var(--primary)",
-                          fontSize: isLead ? ".92rem" : ".82rem",
-                          fontWeight: isLead ? 600 : 400,
-                        }}
-                        title={isLead ? "Team lead" : undefined}
-                      >
-                        {member.firstName} {member.lastName}
-                      </span>
-                    );
-                  })}
-                </div>
-              )}
-            </section>
+  <FileDropzone
+    buttonMode
+    target="pending"
+    pendingFiles={pendingFiles}
+    onPendingFilesChange={setPendingFiles}
+  />
+</section>
           </>
         )}
 
@@ -649,11 +727,7 @@ export const TaskFormModal: React.FC<{
               : undefined
           }
         />
-        {error && (
-          <div role="alert" className="form-error">
-            {error}
-          </div>
-        )}
+        {error && <ErrorNotice error={error} />}
         <div
           style={{
             display: "flex",

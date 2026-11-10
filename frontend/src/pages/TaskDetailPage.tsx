@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useState } from "react";
+import React, { useContext, useEffect, useRef, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { Card } from "../components/common/Card";
 import {
@@ -11,6 +11,8 @@ import {
   History,
   X,
   Minus,
+  Crown,
+  Paperclip,
 } from "lucide-react";
 import { Checkpoint, Task, User } from "../types";
 import {
@@ -35,11 +37,12 @@ import {
   markTaskActivityReadApi,
   getTaskMemberCandidatesApi,
   restoreTaskApi,
+  uploadTaskFilesApi,
+  listTaskFilesApi,
 } from "../services/api";
 import { useAuth } from "../context/AuthContext";
 import { Button } from "../components/common/Button";
 import { Badge } from "../components/common/Badge";
-import { RemoveButton } from "../components/common/RemoveButton";
 import { Input } from "../components/common/Input";
 import { ProgressBar } from "./TaskPoolPage";
 import { TaskFormModal } from "../components/tasks/TaskFormModal";
@@ -53,18 +56,29 @@ import { ActivityDrawer } from "../components/tasks/ActivityDrawer";
 import "../styles/task-drawer.css";
 import { TaskNavbarChatContext } from "../components/layout/AppLayout";
 import { PersonProfileLink } from "../components/common/PersonProfileLink";
-import { PageLoader, RequestError } from "../components/common/LoadingStates";
+import { TaskDetailSkeleton, RequestError } from "../components/common/LoadingStates";
+import { TimeTrackerControls } from "../components/tasks/TimeTrackerControls";
+import { TaskFilesSection, TaskFilesSectionHandle } from "../components/tasks/TaskFilesSection";
+import { FileDropzone, FileDropzoneHandle, getFileIcon } from "../components/tasks/FileDropzone";
+import { formatSize } from "../components/tasks/fileUtils";
+import { ErrorNotice } from "../components/common/ErrorNotice";
+import { IconButton } from "../components/common/IconButton";
+import { TaskFile } from "../types";
 export const TaskDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { isManager, user: currentUser } = useAuth();
   const setChatSlot = useContext(TaskNavbarChatContext);
+  const subtaskDropzoneRef = useRef<FileDropzoneHandle>(null);
+  const filesSectionRef = useRef<TaskFilesSectionHandle>(null);
   const [task, setTask] = useState<Task | null>(null);
   const [users, setUsers] = useState<User[]>([]);
   const [edit, setEdit] = useState(false);
   const [subtaskTitle, setSubtaskTitle] = useState("");
   const [subtaskDeadline, setSubtaskDeadline] = useState("");
   const [assignees, setAssignees] = useState<number[]>([]);
+  const [subtaskFiles, setSubtaskFiles] = useState<File[]>([]);
+  const [subtaskSavedFiles, setSubtaskSavedFiles] = useState<TaskFile[]>([]);
   const [checkpoint, setCheckpoint] = useState("");
   const [error, setError] = useState("");
   const [refreshNotice, setRefreshNotice] = useState("");
@@ -90,7 +104,9 @@ export const TaskDetailPage: React.FC = () => {
   const [outsideAssignee, setOutsideAssignee] = useState<User | null>(null);
   const [confirmAddMember, setConfirmAddMember] = useState(false);
   const [memberToAdd, setMemberToAdd] = useState<User | null>(null);
-  const [restoreStatus, setRestoreStatus] = useState<"TODO" | "IN_PROGRESS" | "REVIEW">("TODO");
+  const [restoreStatus, setRestoreStatus] = useState<
+    "TODO" | "IN_PROGRESS" | "REVIEW"
+  >("TODO");
   const [restoreDialog, setRestoreDialog] = useState(false);
   const [restoreError, setRestoreError] = useState("");
   const [restoring, setRestoring] = useState(false);
@@ -106,10 +122,16 @@ export const TaskDetailPage: React.FC = () => {
     if (!task) return;
     const unfinished = task.subtasks.some((s) => s.status !== "DONE");
     if (unfinished) return;
-    const unticked = task.checkpoints.filter((c) => !isCheckpointDone(c)).length;
+    const unticked = task.checkpoints.filter(
+      (c) => !isCheckpointDone(c),
+    ).length;
     const actionFn = () => action(() => sendTaskToReviewApi(task.id));
     if (unticked > 0) {
-      setConfirm({ title: "Send to review", message: `${unticked} checkpoints are not ticked`, action: actionFn });
+      setConfirm({
+        title: "Send to review",
+        message: `${unticked} checkpoints are not ticked`,
+        action: actionFn,
+      });
     } else actionFn();
   };
   const [unread, setUnread] = useState({
@@ -122,7 +144,15 @@ export const TaskDetailPage: React.FC = () => {
     try {
       const t = await getTaskApi(Number(id));
       setTask(t);
-      setUsers(t.members.map((m) => ({ ...m.user, email: "", phone: "", role: m.user.role || "EMPLOYEE", status: "ACTIVE" })) as User[]);
+      setUsers(
+        t.members.map((m) => ({
+          ...m.user,
+          email: "",
+          phone: "",
+          role: m.user.role || "EMPLOYEE",
+          status: "ACTIVE",
+        })) as User[],
+      );
       if (isManager)
         setUsers(
           (await getAdminUsersApi({ size: 100, status: "ACTIVE" })).content,
@@ -139,36 +169,71 @@ export const TaskDetailPage: React.FC = () => {
   }, [id, isManager]);
   useEffect(() => {
     if (!id) return;
-    const refresh = () =>
+    const refresh = () => {
+      if (document.hidden) return;
       getTaskUnreadApi(Number(id))
         .then(setUnread)
         .catch(() => undefined);
+    };
     refresh();
     const timer = window.setInterval(refresh, 10000);
     return () => window.clearInterval(timer);
   }, [id]);
   useEffect(() => {
+    if (!id) return;
+    const fetchFiles = () => {
+      listTaskFilesApi(Number(id))
+        .then(setSubtaskSavedFiles)
+        .catch(() => undefined);
+    };
+    fetchFiles();
+    const handler = (event: Event) => {
+      if ((event as CustomEvent).detail?.taskId === Number(id)) fetchFiles();
+    };
+    window.addEventListener("task-files-changed", handler);
+    return () => window.removeEventListener("task-files-changed", handler);
+  }, [id]);
+  useEffect(() => {
     if (!setChatSlot) return;
-    const canUse = Boolean(task && (isManager || task.lead?.id === currentUser?.id || task.members.some(m => m.user.id === currentUser?.id)));
-    if (canUse) setChatSlot(<Button
-      className={`navbar-chat-button${unread.chatUnread && drawer !== "chat" ? " has-unread" : ""}`}
-      variant="outline"
-      size="sm"
-      icon={drawer === "chat" ? <X size={15} /> : <MessageCircle size={15} />}
-      onClick={() => setDrawer(v => v === "chat" ? null : "chat")}
-    >
-      Chat{unread.chatUnread && <span className="unread-dot" />}
-    </Button>);
+    const canUse = Boolean(
+      task &&
+      (isManager ||
+        task.lead?.id === currentUser?.id ||
+        task.members.some((m) => m.user.id === currentUser?.id)),
+    );
+    if (canUse)
+      setChatSlot(
+        <Button
+          className={`navbar-chat-button${unread.chatUnread && drawer !== "chat" ? " has-unread" : ""}`}
+          variant="outline"
+          size="sm"
+          icon={
+            drawer === "chat" ? <X size={15} /> : <MessageCircle size={15} />
+          }
+          onClick={() => setDrawer((v) => (v === "chat" ? null : "chat"))}
+        >
+          Chat{unread.chatUnread && <span className="unread-dot" />}
+        </Button>,
+      );
     else setChatSlot(null);
     return () => setChatSlot(null);
-  }, [setChatSlot, task, isManager, currentUser?.id, drawer, unread.chatUnread]);
-  if (error && !task) return <RequestError message={error} onRetry={() => void load()} />;
-  if (!task) return <PageLoader label="Loading task" />;
+  }, [
+    setChatSlot,
+    task,
+    isManager,
+    currentUser?.id,
+    drawer,
+    unread.chatUnread,
+  ]);
+  if (error && !task)
+    return <RequestError message={error} onRetry={() => void load()} />;
+  if (!task) return <TaskDetailSkeleton />;
   const isLead = task.lead?.id === currentUser?.id;
   const isMember = task.members.some(
     (member) => member.user.id === currentUser?.id,
   );
   const canEditTask = (isManager || isLead) && task.status !== "DONE";
+  const canDeleteTask = isManager || (Boolean(task.selfReported) && task.createdBy?.id === currentUser?.id && task.status === "TODO");
   const canActOnTask = canEditTask || isMember;
   const subtasksOpen = canEditTask ? showSubtasks : true;
   const checkpointsOpen = canEditTask ? showCheckpoints : true;
@@ -183,13 +248,16 @@ export const TaskDetailPage: React.FC = () => {
   const memberIds = task.members.map((m) => m.user.id);
   const loadMemberCandidates = async (query: string): Promise<User[]> => {
     const response = await getTaskMemberCandidatesApi(task.id, query);
-    return response.content.map((candidate) => ({
-      ...candidate,
-      email: "",
-      phone: "",
-      role: "EMPLOYEE",
-      status: "ACTIVE",
-    } as User));
+    return response.content.map(
+      (candidate) =>
+        ({
+          ...candidate,
+          email: "",
+          phone: "",
+          role: "EMPLOYEE",
+          status: "ACTIVE",
+        }) as User,
+    );
   };
   return (
     <div
@@ -221,7 +289,15 @@ export const TaskDetailPage: React.FC = () => {
           }}
         >
           <div>
-            <h1 className="page-title">{task.title} {task.status === "DONE" && <Badge variant="default">Archived</Badge>}</h1>
+            <h1 className="page-title">
+              {task.title}{" "}
+              {task.status === "DONE" && (
+                <Badge variant="default">Archived</Badge>
+              )}
+              {task.selfReported && (
+                <Badge variant="default">Self-reported</Badge>
+              )}
+            </h1>
             {!canActOnTask && <Badge variant="default">View only</Badge>}
             <p className="page-subtitle">
               Deadline: {task.deadline} · {task.priority} priority
@@ -241,8 +317,28 @@ export const TaskDetailPage: React.FC = () => {
                   }).format(new Date(task.createdAt))
                 : "—"}
             </small>
-      {refreshNotice && <div className="refresh-notice" role="status">{refreshNotice}<button type="button" onClick={() => setRefreshNotice("")}>Dismiss</button></div>}
-      {task.status === "DONE" && <div className="form-error" style={{ marginTop: ".75rem" }}>This task is read-only. It will be deleted on {task.purgeAt ? new Intl.DateTimeFormat("en-GB", { timeZone: "Africa/Cairo", day: "2-digit", month: "short", year: "numeric" }).format(new Date(task.purgeAt)) : "a later date"}.</div>}
+            {refreshNotice && (
+              <div className="refresh-notice" role="status">
+                {refreshNotice}
+                <button type="button" onClick={() => setRefreshNotice("")}>
+                  Dismiss
+                </button>
+              </div>
+            )}
+            {task.status === "DONE" && (
+              <div className="form-error" style={{ marginTop: ".75rem" }}>
+                This task is read-only. It will be deleted on{" "}
+                {task.purgeAt
+                  ? new Intl.DateTimeFormat("en-GB", {
+                      timeZone: "Africa/Cairo",
+                      day: "2-digit",
+                      month: "short",
+                      year: "numeric",
+                    }).format(new Date(task.purgeAt))
+                  : "a later date"}
+                .
+              </div>
+            )}
           </div>
           <div style={{ display: "flex", gap: ".5rem", flexWrap: "wrap" }}>
             {canEditTask && (
@@ -255,25 +351,50 @@ export const TaskDetailPage: React.FC = () => {
                 Edit task
               </Button>
             )}
-            {(isManager || isLead) && task.status === "DONE" && (
-              <Button variant="outline" size="sm" onClick={() => { setRestoreError(""); setRestoreDialog(true); }}>Restore</Button>
+            {(isManager || (isLead && !task.selfReported)) && task.status === "DONE" && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setRestoreError("");
+                  setRestoreDialog(true);
+                }}
+              >
+                Restore
+              </Button>
             )}
 
-            {canActOnTask && <Button
-              className="activity-header-button"
-              variant="outline"
-              size="sm"
-              icon={<History size={15} />}
-              onClick={() =>
-                setDrawer((v) => (v === "activity" ? null : "activity"))
-              }
-            >
-              Activity{unread.activityUnread && <span className="unread-dot" />}
-            </Button>}
-            {isManager && task.status === "DONE" && (
-              <Button variant="danger" size="sm" icon={<Trash2 size={15} />} onClick={() => { setDeleteArchivedError(""); setDeleteArchivedDialog(true); }}>Delete now</Button>
+            {canActOnTask && (
+              <Button
+                className="activity-header-button"
+                variant="outline"
+                size="sm"
+                icon={<History size={15} />}
+                onClick={() =>
+                  setDrawer((v) => (v === "activity" ? null : "activity"))
+                }
+              >
+                Activity
+                {unread.activityUnread && <span className="unread-dot" />}
+              </Button>
             )}
-            {canEditTask && task.status !== "DONE" && (
+            {canActOnTask && task.status !== "DONE" && (
+              <TimeTrackerControls taskId={task.id} />
+            )}
+            {isManager && task.status === "DONE" && (
+              <Button
+                variant="danger"
+                size="sm"
+                icon={<Trash2 size={15} />}
+                onClick={() => {
+                  setDeleteArchivedError("");
+                  setDeleteArchivedDialog(true);
+                }}
+              >
+                Delete now
+              </Button>
+            )}
+            {canDeleteTask && task.status !== "DONE" && (
               <Button
                 variant="danger"
                 size="sm"
@@ -336,15 +457,13 @@ export const TaskDetailPage: React.FC = () => {
                     Start work
                   </Button>
                 )}
-                {(task.status === "TODO" || task.status === "IN_PROGRESS") && task.subtasks.every((s) => s.status === "DONE") && (
-                  <Button
-                    size="sm"
-                    onClick={sendToReview}
-                  >
-                    Send to review
-                  </Button>
-                )}
-                {task.status === "REVIEW" && (
+                {(task.status === "TODO" || task.status === "IN_PROGRESS") &&
+                  task.subtasks.every((s) => s.status === "DONE") && (
+                    <Button size="sm" onClick={sendToReview}>
+                      Send to review
+                    </Button>
+                  )}
+                {task.status === "REVIEW" && (isManager || !task.selfReported) && (
                   <Button
                     size="sm"
                     onClick={() =>
@@ -354,7 +473,7 @@ export const TaskDetailPage: React.FC = () => {
                     Mark done
                   </Button>
                 )}
-                {task.status === "REVIEW" && (
+                {task.status === "REVIEW" && (isManager || !task.selfReported) && (
                   <Button
                     size="sm"
                     variant="outline"
@@ -372,7 +491,7 @@ export const TaskDetailPage: React.FC = () => {
           )}
         </div>
       </Card>
-      {(
+      {
         <Card>
           <div
             style={{
@@ -384,95 +503,111 @@ export const TaskDetailPage: React.FC = () => {
             }}
           >
             <h2 style={{ margin: 0 }}>Members</h2>
-            {canEditTask && <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              style={{border:"none"}}
-              icon={showMembers ? <Minus size={15} /> : <Plus size={15} />}
-              onClick={() => setShowMembers((v) => !v)}
-            >
-            </Button>}
+            {canEditTask && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                style={{ border: "none" }}
+                icon={showMembers ? <Minus size={15} /> : <Plus size={15} />}
+                onClick={() => setShowMembers((v) => !v)}
+              ></Button>
+            )}
           </div>
           {showMembers && (
             <>
-          <div className="task-member-list">
-            {task.members.map((m) => (
-              <div className="task-member-row" key={m.user.id}>
-                <PersonProfileLink userId={m.user.id} currentUserId={currentUser?.id}><span>
-                  {m.user.firstName} {m.user.lastName}
-                </span></PersonProfileLink>
-                <Badge variant={m.role === "LEAD" ? "primary" : "default"}>
-                  {m.role === "LEAD" ? "Lead" : "Member"}
-                </Badge>
-                <span
-                  style={{ marginLeft: "auto", display: "flex", gap: ".35rem" }}
-                >
-                  {canEditTask && m.role !== "LEAD" && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() =>
-                        action(() => changeTaskLeadApi(task.id, m.user.id))
-                      }
+              <div className="task-member-list">
+                {task.members.map((m) => (
+                  <div className="task-member-row" key={m.user.id}>
+                    <PersonProfileLink
+                      userId={m.user.id}
+                      currentUserId={currentUser?.id}
                     >
-                      Make Lead
-                    </Button>
-                  )}
-                  {canEditTask && <RemoveButton
+                      <span>
+                        {m.user.firstName} {m.user.lastName}
+                      </span>
+                    </PersonProfileLink>
+                    <Badge variant={m.role === "LEAD" ? "primary" : "default"}>
+                      {m.role === "LEAD" ? "Lead" : "Member"}
+                    </Badge>
+                    <span
+                      style={{
+                        marginLeft: "auto",
+                        display: "flex",
+                        gap: ".35rem",
+                      }}
+                    >
+                      {canEditTask && m.role !== "LEAD" && (
+                        <IconButton
+                          aria-label={`Promote ${m.user.firstName} ${m.user.lastName} to Lead`}
+                          title={`Promote ${m.user.firstName} ${m.user.lastName} to Lead`}
+                          className="btn-promote-lead"
+                          icon={<Crown size={16} />}
+                          onClick={() =>
+                            action(() => changeTaskLeadApi(task.id, m.user.id))
+                          }
+                        />
+                      )}
+                      {canEditTask && (
+                        <Button type="button" variant="icon" size="icon" motion="delete"
+                        aria-label="Remove member" title="Remove member" icon={<Trash2 size={16} />}
+                      
+                          onClick={() =>
+                            setConfirm({
+                              title: "Remove member",
+                              message: `Remove ${m.user.firstName} ${m.user.lastName}?`,
+                              action: () =>
+                                action(() =>
+                                  removeTaskMemberApi(task.id, m.user.id),
+                                ),
+                            })
+                          }
+                        >
+                        </Button>
+                      )}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              {canEditTask && (
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: ".75rem",
+                    marginBottom: showAddMember ? ".75rem" : 0,
+                  }}
+                >
+                  <h3 style={{ margin: 0 }}>Add member</h3>
+                  <Button
+                    type="button"
                     size="sm"
                     variant="outline"
-                    onClick={() =>
-                      setConfirm({
-                        title: "Remove member",
-                        message: `Remove ${m.user.firstName} ${m.user.lastName}?`,
-                        action: () =>
-                          action(() => removeTaskMemberApi(task.id, m.user.id)),
-                      })
+                    style={{ border: "none" }}
+                    icon={
+                      showAddMember ? <Minus size={15} /> : <Plus size={15} />
                     }
-                  >
-                    Remove
-                  </RemoveButton>}
-                </span>
-              </div>
-            ))}
-          </div>
-          {canEditTask && <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              gap: ".75rem",
-              marginBottom: showAddMember ? ".75rem" : 0,
-            }}
-          >
-            <h3 style={{ margin: 0 }}>Add member</h3>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              style={{border:"none"}}
-              icon={showAddMember ? <Minus size={15} /> : <Plus size={15} />}
-              onClick={() => setShowAddMember((v) => !v)}
-            >
-            </Button>
-          </div>}
-          {canEditTask && showAddMember && (
-            <PeoplePicker
-              label=""
-              users={users}
-              value={[]}
-              taskMemberIds={memberIds}
-              addMode
-              onChange={() => {}}
-              onOutsideSelect={setMemberToAdd}
-              loadOptions={loadMemberCandidates}
-            />
-          )}
+                    onClick={() => setShowAddMember((v) => !v)}
+                  ></Button>
+                </div>
+              )}
+              {canEditTask && showAddMember && (
+                <PeoplePicker
+                  label=""
+                  users={users}
+                  value={[]}
+                  taskMemberIds={memberIds}
+                  addMode
+                  onChange={() => {}}
+                  onOutsideSelect={setMemberToAdd}
+                  loadOptions={loadMemberCandidates}
+                />
+              )}
             </>
           )}
         </Card>
-      )}
+      }
       <Card>
         <div
           style={{
@@ -496,199 +631,260 @@ export const TaskDetailPage: React.FC = () => {
             />
           )}
         </div>
-        {!canEditTask && task.subtasks.length === 0 && <p className="empty-state">There are no subtasks yet</p>}
+        {!canEditTask && task.subtasks.length === 0 && (
+          <p className="empty-state">There are no subtasks yet</p>
+        )}
         {subtasksOpen && task.subtasks.length > 0 && (
-        <div style={{ display: "grid", gap: ".75rem" }}>
-          {task.subtasks.map((s) => (
-            <div
-              key={s.id}
-              style={{
-                padding: ".85rem",
-                border: "1px solid var(--border-light)",
-                borderRadius: 12,
-              }}
-            >
+          <div style={{ display: "grid", gap: ".75rem" }}>
+            {task.subtasks.map((s) => (
+              <div
+                key={s.id}
+                style={{
+                  padding: ".85rem",
+                  border: "1px solid var(--border-light)",
+                  borderRadius: 12,
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: ".5rem",
+                  }}
+                >
+                  <strong>{s.title}</strong>
+                  <span>{s.status.replace("_", " ")}</span>
+                </div>
+                <small style={{ color: "var(--text-muted)" }}>
+                  Due {s.deadline} ·{" "}
+                  {s.assignees
+                    .map((a) => `${a.firstName} ${a.lastName}`)
+                    .join(", ") || "Unassigned"}
+                </small>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: ".5rem",
+                    alignItems: "center",
+                    marginTop: ".5rem",
+                  }}
+                >
+                  <div style={{ flex: 1 }}>
+                    <ProgressBar value={s.progress} />
+                  </div>
+                  <span>{s.progress}%</span>
+                  {canActOnTask && task.status !== "DONE" && (
+                    <>
+                      <div style={{ width: 140 }}>
+                        <Select
+                          value={s.status}
+                          onValueChange={(status) =>
+                            action(() =>
+                              updateSubtaskApi(task.id, s.id, {
+                                status: status as any,
+                              }),
+                            )
+                          }
+                          options={[
+                            { value: "TODO", label: "To do" },
+                            { value: "IN_PROGRESS", label: "In progress" },
+                            { value: "DONE", label: "Done" },
+                          ]}
+                          ariaLabel="Subtask status"
+                        />
+                      </div>
+                      {canActOnTask && (
+                        <IconButton
+                          aria-label={`Add files to ${s.title}`}
+                          title={`Add files to ${s.title}`}
+                          motion="clip"
+                          icon={<Paperclip size={16} />}
+                          onClick={() => filesSectionRef.current?.openPicker(s.id)}
+                        />
+                      )}
+                      {canEditTask && (
+                        <Button type="button" variant="icon" size="icon" motion="delete"
+                        aria-label="Delete subtask" title="Delete subtask" icon={<Trash2 size={16} />}
+                        onClick={() =>
+                            setConfirm({
+                              title: "Delete subtask",
+                              message: "Delete this subtask?",
+                              action: () =>
+                                action(() => deleteSubtaskApi(task.id, s.id)),
+                            })
+                          }
+                        >
+                        </Button>
+                      )}
+                    </>
+                  )}
+                </div>
+                {subtaskSavedFiles.filter((f) => f.subtaskId === s.id).length > 0 && (
+                  <div style={{ marginTop: ".6rem" }}>
+                    <div style={{ marginBottom: ".3rem" }}>
+                      <small className="muted">
+                        Files ({subtaskSavedFiles.filter((f) => f.subtaskId === s.id).length})
+                      </small>
+                    </div>
+                    <div className="file-list-scrollable">
+                      {subtaskSavedFiles
+                        .filter((f) => f.subtaskId === s.id)
+                        .map((file) => (
+                          <div key={file.id} className="task-file-row">
+                            <span className="task-file-icon">
+                              {getFileIcon(file.originalName, file.contentType)}
+                            </span>
+                            <span className="task-file-name" title={file.originalName} dir="auto">
+                              {file.originalName}
+                            </span>
+                            <small className="muted">{formatSize(file.sizeBytes)}</small>
+                          </div>
+                        ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+        {canEditTask && task.status !== "DONE" && (
+          <>
+            {showSubtasks && task.subtasks.length > 0 && (
               <div
                 style={{
                   display: "flex",
                   justifyContent: "space-between",
-                  gap: ".5rem",
-                }}
-              >
-                <strong>{s.title}</strong>
-                <span>{s.status.replace("_", " ")}</span>
-              </div>
-              <small style={{ color: "var(--text-muted)" }}>
-                Due {s.deadline} ·{" "}
-                {s.assignees
-                  .map((a) => `${a.firstName} ${a.lastName}`)
-                  .join(", ") || "Unassigned"}
-              </small>
-              <div
-                style={{
-                  display: "flex",
-                  gap: ".5rem",
                   alignItems: "center",
-                  marginTop: ".5rem",
+                  gap: ".75rem",
+                  marginTop: "1rem",
                 }}
               >
-                <div style={{ flex: 1 }}>
-                  <ProgressBar value={s.progress} />
-                </div>
-                <span>{s.progress}%</span>
-                {canActOnTask && task.status !== "DONE" && (
-                  <>
-                    <div style={{ width: 140 }}>
-                      <Select
-                        value={s.status}
-                        onValueChange={(status) =>
-                          action(() =>
-                            updateSubtaskApi(task.id, s.id, {
-                              status: status as any,
-                            }),
-                          )
-                        }
-                        options={[
-                          { value: "TODO", label: "To do" },
-                          { value: "IN_PROGRESS", label: "In progress" },
-                          { value: "DONE", label: "Done" },
-                        ]}
-                        ariaLabel="Subtask status"
-                      />
-                    </div>
-                    {canEditTask && (
-                      <Button
-                        size="sm"
-                        variant="danger"
-                        onClick={() =>
-                          setConfirm({
-                            title: "Delete subtask",
-                            message: "Delete this subtask?",
-                            action: () =>
-                              action(() => deleteSubtaskApi(task.id, s.id)),
-                          })
-                        }
-                      >
-                        <Trash2 size={14} />
-                      </Button>
-                    )}
-                  </>
-                )}
+                <h3 style={{ margin: 0 }}>Add subtask</h3>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  aria-label={
+                    showAddSubtask
+                      ? "Hide add subtask form"
+                      : "Show add subtask form"
+                  }
+                  style={{ border: "none" }}
+                  icon={
+                    showAddSubtask ? <Minus size={15} /> : <Plus size={15} />
+                  }
+                  onClick={() => setShowAddSubtask((v) => !v)}
+                />
               </div>
-            </div>
-          ))}
-        </div>
-        )}
-        {canEditTask && task.status !== "DONE" && (
-          <>
-          {showSubtasks && task.subtasks.length > 0 && (
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                gap: ".75rem",
-                marginTop: "1rem",
-              }}
-            >
-              <h3 style={{ margin: 0 }}>Add subtask</h3>
-              <Button
-                type="button"
-                size="sm"
-                variant="outline"
-                aria-label={showAddSubtask ? "Hide add subtask form" : "Show add subtask form"}
-                style={{border : "none"}}
-                icon={showAddSubtask ? <Minus size={15} /> : <Plus size={15} />}
-                onClick={() => setShowAddSubtask((v) => !v)}
-              />
-            </div>
-          )}
-          {showSubtasks && (task.subtasks.length === 0 || showAddSubtask) && (
-          <form
-            noValidate
-            onSubmit={(e) => {
-              e.preventDefault();
+            )}
+            {showSubtasks && (task.subtasks.length === 0 || showAddSubtask) && (
+              <form
+                noValidate
+                onSubmit={(e) => {
+                  e.preventDefault();
 
-              const errs: typeof fieldErrors = {};
-              if (!subtaskTitle.trim())
-                errs.subtaskTitle = "Subtask title is required.";
-              if (!subtaskDeadline)
-                errs.subtaskDeadline = "Deadline is required.";
-              if (!assignees.length)
-                errs.subtaskAssignees = "Select at least one assignee.";
+                  const errs: typeof fieldErrors = {};
+                  if (!subtaskTitle.trim())
+                    errs.subtaskTitle = "Subtask title is required.";
+                  if (!subtaskDeadline)
+                    errs.subtaskDeadline = "Deadline is required.";
+                  if (!assignees.length)
+                    errs.subtaskAssignees = "Select at least one assignee.";
 
-              setFieldErrors((p) => ({
-                ...p,
-                subtaskTitle: errs.subtaskTitle,
-                subtaskDeadline: errs.subtaskDeadline,
-                subtaskAssignees: errs.subtaskAssignees,
-              }));
-              if (Object.keys(errs).length) return;
+                  setFieldErrors((p) => ({
+                    ...p,
+                    subtaskTitle: errs.subtaskTitle,
+                    subtaskDeadline: errs.subtaskDeadline,
+                    subtaskAssignees: errs.subtaskAssignees,
+                  }));
+                  if (Object.keys(errs).length) return;
 
-              action(() =>
-                createSubtaskApi(task.id, {
-                  title: subtaskTitle.trim(),
-                  deadline: subtaskDeadline,
-                  assigneeUserIds: assignees,
-                  confirmAddMember,
-                }),
-              );
-              setSubtaskTitle("");
-              setSubtaskDeadline("");
-              setAssignees([]);
-              setConfirmAddMember(false);
-            }}
-            style={{ display: "grid", gap: ".75rem", marginTop: "1rem" }}
-          >
-            <div>
-              <Input
-                label=""
-                placeholder="New subtask"
-                value={subtaskTitle}
-                onChange={(e) => {
-                  setSubtaskTitle(e.target.value);
-                  setFieldErrors((p) => ({ ...p, subtaskTitle: undefined }));
+                  action(async () => {
+                    const created = await createSubtaskApi(task.id, {
+                      title: subtaskTitle.trim(),
+                      deadline: subtaskDeadline,
+                      assigneeUserIds: assignees,
+                      confirmAddMember,
+                    });
+                    if (subtaskDropzoneRef.current?.hasFiles()) {
+                      await subtaskDropzoneRef.current.uploadPending(
+                        task.id,
+                        created.id,
+                      );
+                    }
+                  });
+                  setSubtaskTitle("");
+                  setSubtaskDeadline("");
+                  setAssignees([]);
+                  setSubtaskFiles([]);
+                  setConfirmAddMember(false);
                 }}
-                error={fieldErrors.subtaskTitle}
-              />
-            </div>
+                style={{ display: "grid", gap: ".75rem", marginTop: "1rem" }}
+              >
+                <div>
+                  <Input
+                    label=""
+                    placeholder="New subtask"
+                    value={subtaskTitle}
+                    onChange={(e) => {
+                      setSubtaskTitle(e.target.value);
+                      setFieldErrors((p) => ({
+                        ...p,
+                        subtaskTitle: undefined,
+                      }));
+                    }}
+                    error={fieldErrors.subtaskTitle}
+                  />
+                </div>
 
-            <div>
-              <Input
-                label=""
-                type="date"
-                value={subtaskDeadline}
-                onChange={(e) => {
-                  setSubtaskDeadline(e.target.value);
-                  setFieldErrors((p) => ({ ...p, subtaskDeadline: undefined }));
-                }}
-                error={fieldErrors.subtaskDeadline}
-              />
-            </div>
+                <div>
+                  <Input
+                    label=""
+                    type="date"
+                    value={subtaskDeadline}
+                    onChange={(e) => {
+                      setSubtaskDeadline(e.target.value);
+                      setFieldErrors((p) => ({
+                        ...p,
+                        subtaskDeadline: undefined,
+                      }));
+                    }}
+                    error={fieldErrors.subtaskDeadline}
+                  />
+                </div>
 
-            <div>
-              <PeoplePicker
-                label="Assignees"
-                users={users}
-                value={assignees}
-                taskMemberIds={memberIds}
-                onOutsideSelect={setOutsideAssignee}
-                loadOptions={loadMemberCandidates}
-                onChange={(v) => {
-                  setAssignees(v);
-                  setFieldErrors((p) => ({ ...p, subtaskAssignees: undefined }));
-                }}
-                error={fieldErrors.subtaskAssignees}
-              />
-            </div>
-
-            <div style={{ textAlign: "right", marginTop: "0.25rem" }}>
-              <Button type="submit" icon={<Plus size={16} />}>
-                Add subtask
-              </Button>
-            </div>
-          </form>
-          )}
+                <div>
+                  <PeoplePicker
+                    label="Assignees"
+                    users={users}
+                    value={assignees}
+                    taskMemberIds={memberIds}
+                    onOutsideSelect={setOutsideAssignee}
+                    loadOptions={loadMemberCandidates}
+                    onChange={(v) => {
+                      setAssignees(v);
+                      setFieldErrors((p) => ({
+                        ...p,
+                        subtaskAssignees: undefined,
+                      }));
+                    }}
+                    error={fieldErrors.subtaskAssignees}
+                  />
+                </div>
+                <div style={{ display : "flex" , justifyContent :"flex-end", marginTop: "0.25rem" }}>
+                <FileDropzone
+                    ref={subtaskDropzoneRef}
+                    buttonMode
+                    target="pending"
+                    pendingFiles={subtaskFiles}
+                    onPendingFilesChange={setSubtaskFiles}
+                  />
+                  <Button type="submit" icon={<Plus size={16} />} style={{marginRight :"0.5rem" , marginLeft :"0.5rem"}}>
+                    Add subtask
+                  </Button>
+                </div>
+              </form>
+            )}
           </>
         )}
       </Card>
@@ -709,7 +905,9 @@ export const TaskDetailPage: React.FC = () => {
               size="sm"
               variant="outline"
               style={{ border: "none" }}
-              aria-label={showCheckpoints ? "Hide checkpoints" : "Show checkpoints"}
+              aria-label={
+                showCheckpoints ? "Hide checkpoints" : "Show checkpoints"
+              }
               icon={showCheckpoints ? <Minus size={15} /> : <Plus size={15} />}
               onClick={() => setShowCheckpoints((v) => !v)}
             />
@@ -752,27 +950,31 @@ export const TaskDetailPage: React.FC = () => {
                             alignItems: "center",
                           }}
                         >
-                          <button
+                          <Button
                             type="button"
-                            aria-label={`Toggle ${c.title}`}
-                            className={`cp-btn cp-btn--check ${done ? "is-done" : ""}`}
+                            variant="icon"
+                            size="icon"
+                            motion="check"
+                            aria-label="Save name"
+                            title="Save name"
+                            icon={<Check size={16} />}
                             onClick={() =>
                               action(() => toggleCheckpointApi(task.id, c.id))
                             }
-                          >
-                            <Check size={20} />
-                          </button>
+                          />
 
-                          <button
+                          <Button
                             type="button"
-                            aria-label={`Delete ${c.title}`}
-                            className="cp-btn cp-btn--trash"
+                            variant="icon"
+                            size="icon"
+                            motion="delete"
+                            aria-label="Delete check point"
+                            title="Delete check point"
+                            icon={<Trash2 size={16} />}
                             onClick={() =>
                               action(() => deleteCheckpointApi(task.id, c.id))
                             }
-                          >
-                            <Trash2 size={18} />
-                          </button>
+                          />
                         </div>
                       )}
                     </div>
@@ -822,6 +1024,19 @@ export const TaskDetailPage: React.FC = () => {
           </>
         )}
       </Card>
+      {canActOnTask && (
+        <TaskFilesSection
+          ref={filesSectionRef}
+          taskId={task.id}
+          subtasks={task.subtasks.map((subtask) => ({
+            id: subtask.id,
+            title: subtask.title,
+          }))}
+          currentUserId={currentUser?.id}
+          canUpload={task.status !== "DONE"}
+          canDelete={isManager || isLead}
+        />
+      )}
       {edit && (
         <TaskFormModal
           task={task}
@@ -834,6 +1049,15 @@ export const TaskDetailPage: React.FC = () => {
               deadline: data.deadline,
               priority: data.priority,
             });
+            if (data.files?.length) {
+              try {
+                await uploadTaskFilesApi(task.id, data.files);
+              } catch {
+                throw new Error(
+                  "Task saved, but one or more files could not be uploaded.",
+                );
+              }
+            }
             await load();
           }}
         />
@@ -853,26 +1077,124 @@ export const TaskDetailPage: React.FC = () => {
         />
       )}
       {restoreDialog && (
-        <Modal isOpen title="Restore archived task" onClose={() => { if (!restoring) setRestoreDialog(false); }}>
-          <p>This returns the task to work and keeps its subtasks, comments and activity.</p>
-          {restoreError && <div className="form-error" role="alert">{restoreError}</div>}
-          <label className="field-label" style={{ display: "grid", gap: ".4rem", marginTop: "1rem" }}>
+        <Modal
+          isOpen
+          title="Restore archived task"
+          onClose={() => {
+            if (!restoring) setRestoreDialog(false);
+          }}
+        >
+          <p>
+            This returns the task to work and keeps its subtasks, comments and
+            activity.
+          </p>
+          {restoreError && <ErrorNotice error={restoreError} />}
+          <label
+            className="field-label"
+            style={{ display: "grid", gap: ".4rem", marginTop: "1rem" }}
+          >
             Restore status
-            <Select ariaLabel="Restore status" value={restoreStatus} onValueChange={(value) => setRestoreStatus(value as typeof restoreStatus)} options={[{ value: "TODO", label: "To do" }, { value: "IN_PROGRESS", label: "In progress" }, { value: "REVIEW", label: "Review" }]} />
+            <Select
+              ariaLabel="Restore status"
+              value={restoreStatus}
+              onValueChange={(value) =>
+                setRestoreStatus(value as typeof restoreStatus)
+              }
+              options={[
+                { value: "TODO", label: "To do" },
+                { value: "IN_PROGRESS", label: "In progress" },
+                { value: "REVIEW", label: "Review" },
+              ]}
+            />
           </label>
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: ".75rem", marginTop: "1.25rem" }}>
-            <Button variant="outline" disabled={restoring} onClick={() => setRestoreDialog(false)}>Cancel</Button>
-            <Button disabled={restoring} onClick={async () => { setRestoring(true); setRestoreError(""); try { await restoreTaskApi(task.id, restoreStatus); await load(); setRestoreDialog(false); } catch { setRestoreError("The task could not be restored. Please try again."); } finally { setRestoring(false); } }}>Restore</Button>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: ".75rem",
+              marginTop: "1.25rem",
+            }}
+          >
+            <Button
+              variant="outline"
+              disabled={restoring}
+              onClick={() => setRestoreDialog(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              disabled={restoring}
+              onClick={async () => {
+                setRestoring(true);
+                setRestoreError("");
+                try {
+                  await restoreTaskApi(task.id, restoreStatus);
+                  await load();
+                  setRestoreDialog(false);
+                } catch {
+                  setRestoreError(
+                    "The task could not be restored. Please try again.",
+                  );
+                } finally {
+                  setRestoring(false);
+                }
+              }}
+            >
+              Restore
+            </Button>
           </div>
         </Modal>
       )}
       {deleteArchivedDialog && (
-        <Modal isOpen title="Delete archived task now" onClose={() => { if (!deletingArchived) setDeleteArchivedDialog(false); }}>
-          <p>This cannot be undone. The task, its subtasks, checkpoints, comments, activity and notifications will be removed now instead of on the automatic deletion date.</p>
-          {deleteArchivedError && <div className="form-error" role="alert">{deleteArchivedError}</div>}
-          <div style={{ display: "flex", justifyContent: "flex-end", gap: ".75rem", marginTop: "1.25rem" }}>
-            <Button variant="outline" disabled={deletingArchived} onClick={() => setDeleteArchivedDialog(false)}>Cancel</Button>
-            <Button variant="danger" disabled={deletingArchived} onClick={async () => { setDeletingArchived(true); setDeleteArchivedError(""); try { await deleteTaskApi(task.id); setDeleteArchivedDialog(false); navigate("/tasks?tab=archived"); } catch { setDeleteArchivedError("The task could not be deleted. Please try again."); } finally { setDeletingArchived(false); } }}>Delete now</Button>
+        <Modal
+          isOpen
+          title="Delete archived task now"
+          onClose={() => {
+            if (!deletingArchived) setDeleteArchivedDialog(false);
+          }}
+        >
+          <p>
+            This cannot be undone. The task, its subtasks, checkpoints,
+            comments, activity and notifications will be removed now instead of
+            on the automatic deletion date.
+          </p>
+          {deleteArchivedError && <ErrorNotice error={deleteArchivedError} />}
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              gap: ".75rem",
+              marginTop: "1.25rem",
+            }}
+          >
+            <Button
+              variant="outline"
+              disabled={deletingArchived}
+              onClick={() => setDeleteArchivedDialog(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="danger"
+              disabled={deletingArchived}
+              onClick={async () => {
+                setDeletingArchived(true);
+                setDeleteArchivedError("");
+                try {
+                  await deleteTaskApi(task.id);
+                  setDeleteArchivedDialog(false);
+                  navigate("/tasks?tab=archived");
+                } catch {
+                  setDeleteArchivedError(
+                    "The task could not be deleted. Please try again.",
+                  );
+                } finally {
+                  setDeletingArchived(false);
+                }
+              }}
+            >
+              Delete now
+            </Button>
           </div>
         </Modal>
       )}
@@ -890,7 +1212,11 @@ export const TaskDetailPage: React.FC = () => {
                 return;
               }
               action(() =>
-                sendTaskBackApi(task.id, { reason, subtaskIds: reopenSubtasks, checkpointIds: reopenCheckpoints }),
+                sendTaskBackApi(task.id, {
+                  reason,
+                  subtaskIds: reopenSubtasks,
+                  checkpointIds: reopenCheckpoints,
+                }),
               ).then(() => setSendBack(false));
             }}
           >
@@ -910,12 +1236,40 @@ export const TaskDetailPage: React.FC = () => {
             <FieldError message={fieldErrors.reason} />
             <div style={{ display: "grid", gap: ".4rem", marginTop: "1rem" }}>
               <strong>Reopen subtasks</strong>
-              {task.subtasks.filter((s) => s.status === "DONE").map((s) => (
-                <label key={s.id}><input type="checkbox" checked={reopenSubtasks.includes(s.id)} onChange={(e) => setReopenSubtasks((v) => e.target.checked ? [...v, s.id] : v.filter((id) => id !== s.id))} /> {s.title}</label>
-              ))}
+              {task.subtasks
+                .filter((s) => s.status === "DONE")
+                .map((s) => (
+                  <label key={s.id}>
+                    <input
+                      type="checkbox"
+                      checked={reopenSubtasks.includes(s.id)}
+                      onChange={(e) =>
+                        setReopenSubtasks((v) =>
+                          e.target.checked
+                            ? [...v, s.id]
+                            : v.filter((id) => id !== s.id),
+                        )
+                      }
+                    />{" "}
+                    {s.title}
+                  </label>
+                ))}
               <strong>Reopen checkpoints</strong>
               {task.checkpoints.filter(isCheckpointDone).map((c) => (
-                <label key={c.id}><input type="checkbox" checked={reopenCheckpoints.includes(c.id)} onChange={(e) => setReopenCheckpoints((v) => e.target.checked ? [...v, c.id] : v.filter((id) => id !== c.id))} /> {c.title}</label>
+                <label key={c.id}>
+                  <input
+                    type="checkbox"
+                    checked={reopenCheckpoints.includes(c.id)}
+                    onChange={(e) =>
+                      setReopenCheckpoints((v) =>
+                        e.target.checked
+                          ? [...v, c.id]
+                          : v.filter((id) => id !== c.id),
+                      )
+                    }
+                  />{" "}
+                  {c.title}
+                </label>
               ))}
             </div>
             <div style={{ textAlign: "right", marginTop: "1rem" }}>

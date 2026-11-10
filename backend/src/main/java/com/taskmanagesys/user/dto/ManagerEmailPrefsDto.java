@@ -7,14 +7,16 @@ public class ManagerEmailPrefsDto {
     private boolean onSignupRequest;
     private boolean onTaskCompleted;
     private boolean onArchiveWarning;
+    private boolean onSelfReported = true;
 
     public ManagerEmailPrefsDto() {}
 
-    public ManagerEmailPrefsDto(boolean emailsEnabled, boolean onSignupRequest, boolean onTaskCompleted, boolean onArchiveWarning) {
+    public ManagerEmailPrefsDto(boolean emailsEnabled, boolean onSignupRequest, boolean onTaskCompleted, boolean onArchiveWarning, boolean onSelfReported) {
         this.emailsEnabled = emailsEnabled;
         this.onSignupRequest = onSignupRequest;
         this.onTaskCompleted = onTaskCompleted;
         this.onArchiveWarning = onArchiveWarning;
+        this.onSelfReported = onSelfReported;
     }
 
     public static ManagerEmailPrefsDto from(ManagerEmailPrefs prefs) {
@@ -23,7 +25,8 @@ public class ManagerEmailPrefsDto {
                 prefs.isEmailsEnabled(),
                 prefs.isOnSignupRequest(),
                 prefs.isOnTaskCompleted(),
-                prefs.isOnArchiveWarning()
+                prefs.isOnArchiveWarning(),
+                prefs.isOnSelfReported()
         );
     }
 
@@ -38,4 +41,7 @@ public class ManagerEmailPrefsDto {
 
     public boolean isOnArchiveWarning() { return onArchiveWarning; }
     public void setOnArchiveWarning(boolean onArchiveWarning) { this.onArchiveWarning = onArchiveWarning; }
+
+    public boolean isOnSelfReported() { return onSelfReported; }
+    public void setOnSelfReported(boolean onSelfReported) { this.onSelfReported = onSelfReported; }
 }

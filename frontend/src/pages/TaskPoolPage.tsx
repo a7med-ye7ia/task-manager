@@ -6,6 +6,7 @@ import { Task, User } from "../types";
 import {
   getTaskPoolApi,
   createTaskApi,
+  uploadTaskFilesApi,
   getAdminUsersApi,
   deleteTaskApi,
 } from "../services/api";
@@ -101,8 +102,8 @@ export const TaskPoolPage: React.FC = () => {
         priority: priority === "ALL" ? "" : priority,
         deadlineFrom,
         deadlineTo,
-        myTasks,
-        iLead: reviewOnly && !isManager ? true : iLead,
+        myTasks: reviewOnly && isManager ? false : myTasks,
+        iLead: reviewOnly && !isManager ? true : (reviewOnly && isManager ? false : iLead),
         archived: tab === "archived",
         sort,
       });
@@ -124,7 +125,9 @@ export const TaskPoolPage: React.FC = () => {
   };
   useEffect(() => {
     void load();
-    const refreshOnFocus = () => void load();
+    const refreshOnFocus = () => {
+      if (!document.hidden) void load();
+    };
     window.addEventListener("focus", refreshOnFocus);
     const timer = window.setInterval(refreshOnFocus, 30000);
     return () => {
@@ -216,11 +219,9 @@ export const TaskPoolPage: React.FC = () => {
             Showing {tasks.length} of {total} tasks
           </p>
         </div>
-        {isManager && (
-          <Button icon={<Plus size={18} />} onClick={() => setShowForm(true)}>
-            New task
-          </Button>
-        )}
+        <Button icon={<Plus size={18} />} onClick={() => setShowForm(true)}>
+          New task
+        </Button>
       </div>
       <div
         style={{
@@ -291,13 +292,13 @@ export const TaskPoolPage: React.FC = () => {
               tasks.filter(
                 (t) =>
                   t.status === "REVIEW" &&
-                  (isManager || t.lead?.id === currentUser?.id),
+                  (isManager || (t.lead?.id === currentUser?.id && !t.selfReported)),
               ).length
             }{" "}
             {tasks.filter(
               (t) =>
                 t.status === "REVIEW" &&
-                (isManager || t.lead?.id === currentUser?.id),
+                (isManager || (t.lead?.id === currentUser?.id && !t.selfReported)),
             ).length === 1
               ? "task awaiting review"
               : "tasks awaiting review"}
@@ -527,6 +528,9 @@ export const TaskPoolPage: React.FC = () => {
                     >
                       <strong>{task.title}</strong>
                       {badge(task.priority)}
+                      {task.selfReported && (
+                        <Badge variant="default">Self-reported</Badge>
+                      )}
                     </div>
                     <small style={{ color: "var(--text-muted)" }}>
                       Lead:{" "}
@@ -598,7 +602,11 @@ export const TaskPoolPage: React.FC = () => {
           users={users}
           onClose={() => setShowForm(false)}
           onSave={async (data) => {
-            await createTaskApi(data);
+            const created = await createTaskApi(data);
+            if (data.files?.length) {
+              try { await uploadTaskFilesApi(created.id, data.files); }
+              catch { throw new Error("Task saved, but one or more files could not be uploaded."); }
+            }
             await load();
           }}
         />

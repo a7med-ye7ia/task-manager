@@ -22,11 +22,11 @@ public class CreateTaskRequest {
     @NotNull(message = "Priority is required")
     private TaskPriority priority = TaskPriority.MEDIUM;
 
-    @NotNull(message = "At least one employee must be selected")
-    @Size(min = 1, message = "At least one employee must be selected")
     private List<Long> memberUserIds;
 
     private Long leadUserId;
+
+    private Boolean selfReported;
 
     private List<CreateSubtaskRequest> subtasks;
 
@@ -51,6 +51,9 @@ public class CreateTaskRequest {
 
     public Long getLeadUserId() { return leadUserId; }
     public void setLeadUserId(Long leadUserId) { this.leadUserId = leadUserId; }
+
+    public Boolean getSelfReported() { return selfReported; }
+    public void setSelfReported(Boolean selfReported) { this.selfReported = selfReported; }
 
     public List<CreateSubtaskRequest> getSubtasks() { return subtasks; }
     public void setSubtasks(List<CreateSubtaskRequest> subtasks) { this.subtasks = subtasks; }

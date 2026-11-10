@@ -54,13 +54,13 @@ The backend uses Spring Boot and PostgreSQL. The frontend uses React with Vite.
 
 ## Signing in
 
-The first Manager account comes from the seed Manager settings in `.env` (see `.env.example`). Sign in with it, then invite employees from the Users page.
+The first Manager account comes from the seed Manager settings in `.env` (see `.env.example`). Passwords require 8–64 characters, at least one uppercase letter, one lowercase letter, one digit, and at least one special character (e.g. `Manager123!`). Sign in with it, then invite employees from the Users page.
 
 People can also sign up on their own. They confirm their email, and then a Manager approves them from the Pending Requests page. Only Gmail addresses are accepted.
 
 ## Emails in development
 
-Mailpit is the active local mode in `.env.example`. Every message goes to the local inbox at http://localhost:8025. The backend imports `../.env` when started from `backend`, and Docker Compose also reads the root `.env`. The exact mail variables are `MAIL_ENABLED`, `SPRING_MAIL_HOST`, `SPRING_MAIL_PORT`, `SPRING_MAIL_USERNAME`, `SPRING_MAIL_PASSWORD`, `SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH`, `SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE`, `SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_REQUIRED`, `SPRING_MAIL_PROPERTIES_MAIL_SMTP_CONNECTIONTIMEOUT`, `SPRING_MAIL_PROPERTIES_MAIL_SMTP_TIMEOUT`, `SPRING_MAIL_PROPERTIES_MAIL_SMTP_WRITETIMEOUT`, and `APP_MAIL_FROM`.
+Mailpit is the active local mode in `.env.example`. Every message goes to the local inbox at http://localhost:8025. The backend imports `../.env` when started from `backend`, and Docker Compose also reads the root `.env`. The exact mail variables are `MAIL_ENABLED`, `SPRING_MAIL_HOST`, `SPRING_MAIL_PORT`, `SPRING_MAIL_USERNAME`, `SPRING_MAIL_PASSWORD`, `SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH`, `SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE`, `SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_REQUIRED`, `SPRING_MAIL_PROPERTIES_MAIL_SMTP_CONNECTIONTIMEOUT`, `SPRING_MAIL_PROPERTIES_MAIL_SMTP_TIMEOUT`, `SPRING_MAIL_PROPERTIES_MAIL_SMTP_WRITETIMEOUT`, and `APP_MAIL_FROM`. CORS uses `APP_BASE_URL` plus optional comma-separated `CORS_ALLOWED_ORIGINS` values.
 
 Invitation, verification and password reset links show up in Mailpit.
 

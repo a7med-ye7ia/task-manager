@@ -18,6 +18,11 @@ import {
   UnreadResponse,
   NotificationItem,
   PublicProfile,
+  TimeSession,
+  TimeTaskOption,
+  TimeSubtaskOption,
+  TaskFile,
+  UserReportResponse,
 } from '../types';
 
 let currentAccessToken: string | null = localStorage.getItem('accessToken');
@@ -41,7 +46,17 @@ async function parseResponseBody<T>(response: Response): Promise<T> {
     return undefined as T;
   }
   const body = await response.text();
-  return body.trim() ? (JSON.parse(body) as T) : (undefined as T);
+  if (!body.trim()) return undefined as T;
+  const contentType = response.headers.get('content-type')?.toLowerCase() || '';
+  if (contentType.includes('json')) return JSON.parse(body) as T;
+  if (!contentType && /^[\[{]/.test(body.trim())) {
+    try { return JSON.parse(body) as T; } catch { /* treat as text */ }
+  }
+  return body as unknown as T;
+}
+
+export async function getText(url: string): Promise<string> {
+  return request<string>(url);
 }
 
 export class ApiError extends Error {
@@ -373,8 +388,20 @@ export async function restoreUserApi(userId: number): Promise<{ message: string 
   });
 }
 
-export async function getUserTasksApi(userId: number): Promise<UserTaskSummary[]> {
-  return request<UserTaskSummary[]>(`/api/users/${userId}/tasks`);
+export async function getUserTasksApi(userId: number, from?: string, to?: string): Promise<UserTaskSummary[]> {
+  const query = new URLSearchParams();
+  if (from) query.set('from', from);
+  if (to) query.set('to', to);
+  const qStr = query.toString();
+  return request<UserTaskSummary[]>(`/api/users/${userId}/tasks${qStr ? `?${qStr}` : ''}`);
+}
+
+export async function getUserReportApi(userId: number, from?: string, to?: string): Promise<UserReportResponse> {
+  const query = new URLSearchParams();
+  if (from) query.set('from', from);
+  if (to) query.set('to', to);
+  const qStr = query.toString();
+  return request<UserReportResponse>(`/api/users/${userId}/report${qStr ? `?${qStr}` : ''}`);
 }
 
 // Tasks
@@ -421,6 +448,51 @@ export async function deleteCheckpointApi(taskId: number, checkpointId: number):
 export async function addTaskMemberApi(taskId:number,userId:number):Promise<Task>{ return request<Task>(`/api/tasks/${taskId}/members/${userId}`,{method:'POST'}); }
 export async function removeTaskMemberApi(taskId:number,userId:number):Promise<Task>{ return request<Task>(`/api/tasks/${taskId}/members/${userId}`,{method:'DELETE'}); }
 export async function changeTaskLeadApi(taskId:number,userId:number):Promise<Task>{ return request<Task>(`/api/tasks/${taskId}/lead/${userId}`,{method:'PUT'}); }
+
+export async function listTimeSessionsApi(from?: string, to?: string): Promise<import('../types').TimeRange> {
+  const query = new URLSearchParams(); if (from) query.set('from', from); if (to) query.set('to', to);
+  return request<import('../types').TimeRange>(`/api/time-sessions?${query}`);
+}
+export async function startTimeSessionApi(taskId: number, subtaskId?: number, confirmSwitch = false, confirmOvertime = false, startNote?: string): Promise<TimeSession> {
+  return request<TimeSession>('/api/time-sessions/start', { method: 'POST', body: JSON.stringify({ taskId, subtaskId, confirmSwitch, confirmOvertime, startNote }) });
+}
+export async function pauseTimeSessionApi(id: number): Promise<TimeSession> { return request<TimeSession>(`/api/time-sessions/${id}/pause`, { method: 'POST' }); }
+export async function resumeTimeSessionApi(id: number): Promise<TimeSession> { return request<TimeSession>(`/api/time-sessions/${id}/resume`, { method: 'POST' }); }
+export async function stopTimeSessionApi(id: number): Promise<TimeSession> { return request<TimeSession>(`/api/time-sessions/${id}/stop`, { method: 'POST' }); }
+export async function heartbeatTimeSessionApi(id: number): Promise<TimeSession> { return request<TimeSession>(`/api/time-sessions/${id}/heartbeat`, { method: 'POST' }); }
+export async function addManualTimeSessionApi(data: { taskId: number; subtaskId?: number; startedAt: string; endedAt: string; note: string }): Promise<TimeSession> { return request<TimeSession>('/api/time-sessions/manual', { method: 'POST', body: JSON.stringify(data) }); }
+export async function editManualTimeSessionApi(id: number, data: { taskId: number; subtaskId?: number; startedAt: string; endedAt: string; note: string }): Promise<TimeSession> { return request<TimeSession>(`/api/time-sessions/${id}/manual`, { method: 'PUT', body: JSON.stringify(data) }); }
+export async function deleteManualTimeSessionApi(id: number): Promise<void> { return request<void>(`/api/time-sessions/${id}/manual`, { method: 'DELETE' }); }
+export async function getTimeTaskOptionsApi(query = '', page = 0): Promise<PageResponse<TimeTaskOption>> { const params = new URLSearchParams({ query, page: String(page) }); return request<PageResponse<TimeTaskOption>>(`/api/time-sessions/task-options?${params}`); }
+export async function getTimeSubtaskOptionsApi(taskId: number): Promise<TimeSubtaskOption[]> { return request<TimeSubtaskOption[]>(`/api/time-sessions/task-options/${taskId}/subtasks`); }
+export async function listTaskFilesApi(taskId: number): Promise<TaskFile[]> { return request<TaskFile[]>(`/api/tasks/${taskId}/files`); }
+export async function getTaskFileTokenApi(taskId:number,fileId:number):Promise<string>{return request<string>(`/api/tasks/${taskId}/files/${fileId}/view-token`);}
+export function getTaskFileContentUrl(taskId:number,fileId:number,token:string):string{return `${apiBaseUrl}/api/tasks/${taskId}/files/${fileId}/content?token=${encodeURIComponent(token)}`;}
+export async function getTaskFileDetailApi(taskId:number,fileId:number,subtaskId?:number):Promise<import('../types').TaskFileDetail>{return request(`/api/tasks/${taskId}/files/${fileId}/metadata${subtaskId ? `?subtaskId=${subtaskId}` : ''}`);}
+export async function getTaskFileTextApi(taskId:number,fileId:number):Promise<string>{return getText(`/api/tasks/${taskId}/files/${fileId}/text`);}
+export async function getTaskFileZipEntriesApi(taskId:number,fileId:number):Promise<{name:string;size:number}[]>{return request(`/api/tasks/${taskId}/files/${fileId}/zip-entries`);}
+export async function uploadTaskFilesApi(taskId: number, files: File[], subtaskId?: number, onProgress?: (file: File, percent: number) => void, onAbortReady?: (abort: () => void) => void): Promise<TaskFile[]> {
+  const results: TaskFile[] = [];
+  for (const file of files) {
+    const body = new FormData(); body.append('files', file); if (subtaskId !== undefined) body.append('subtaskId', String(subtaskId));
+    const saved = await new Promise<TaskFile[]>((resolve, reject) => {
+      const xhr = new XMLHttpRequest(); xhr.open('POST', `${apiBaseUrl}/api/tasks/${taskId}/files`); xhr.withCredentials = true; xhr.timeout = 120000; onAbortReady?.(() => xhr.abort());
+      if (currentAccessToken) xhr.setRequestHeader('Authorization', `Bearer ${currentAccessToken}`);
+      xhr.upload.onprogress = (event) => { if (event.lengthComputable) onProgress?.(file, Math.max(1, Math.round(event.loaded / event.total * 100))); };
+      xhr.onload = () => { let payload: any = undefined; try { payload = xhr.responseText ? JSON.parse(xhr.responseText) : undefined; } catch { /* handled below */ } if (xhr.status >= 200 && xhr.status < 300) resolve(payload as TaskFile[]); else reject(new ApiError({ status: xhr.status, code: payload?.code || 'FILE_UPLOAD_FAILED', message: payload?.message || 'File could not be uploaded.', fieldErrors: payload?.fieldErrors || [], traceId: payload?.traceId })); };
+      xhr.onerror = () => reject(new ApiError({ status: 0, code: 'NETWORK_ERROR', message: 'Cannot reach the server. Check your connection.', fieldErrors: [] }));
+      xhr.ontimeout = () => reject(new ApiError({ status: 0, code: 'UPLOAD_TIMEOUT', message: 'The upload timed out. Try again.', fieldErrors: [] }));
+      xhr.onabort = () => reject(new ApiError({ status: 0, code: 'UPLOAD_CANCELLED', message: 'Upload was cancelled.', fieldErrors: [] })); xhr.send(body);
+    });
+    results.push(...(saved || [])); onProgress?.(file, 100);
+  }
+  window.dispatchEvent(new CustomEvent('task-files-changed', { detail: { taskId } }));
+  return results;
+}
+export async function deleteTaskFileApi(taskId: number, fileId: number): Promise<void> { return request<void>(`/api/tasks/${taskId}/files/${fileId}`, { method: 'DELETE' }); }
+export async function renameTaskFileApi(taskId: number, fileId: number, name: string): Promise<TaskFile> { return request<TaskFile>(`/api/tasks/${taskId}/files/${fileId}`, { method: 'PATCH', body: JSON.stringify({ name }) }); }
+export async function editTaskFileContentApi(taskId: number, fileId: number, content: string, expectedUpdatedAt?: string): Promise<TaskFile> { return request<TaskFile>(`/api/tasks/${taskId}/files/${fileId}/content`, { method: 'PUT', body: JSON.stringify({ content, expectedUpdatedAt }) }); }
+export async function downloadTaskFileApi(taskId: number, fileId: number): Promise<Blob> { const response = await fetch(`${apiBaseUrl}/api/tasks/${taskId}/files/${fileId}/download`, { headers: currentAccessToken ? { Authorization: `Bearer ${currentAccessToken}` } : {}, credentials: 'include' }); if (!response.ok) throw new ApiError({ status: response.status, code: 'FILE_DOWNLOAD_FAILED', message: 'File could not be downloaded', fieldErrors: [] }); return response.blob(); }
 
 // Admin Pending
 export async function getAdminPendingUsersApi(

@@ -54,4 +54,24 @@ class FlywaySchemaTest {
         );
         assertTrue(count != null && count > 0, "Partial unique index uq_task_members_lead should exist in PostgreSQL");
     }
+
+    @Test
+    void testPerformanceIndexesExist() {
+        List<String> indexes = List.of(
+                "idx_tasks_status_priority_deadline",
+                "idx_tasks_self_reported",
+                "idx_tasks_done_at_purge_at",
+                "idx_task_members_user_role",
+                "idx_time_sessions_task_user",
+                "idx_work_history_user_task"
+        );
+        for (String idx : indexes) {
+            Integer count = jdbcTemplate.queryForObject(
+                    "SELECT COUNT(*) FROM pg_indexes WHERE indexname = ?",
+                    Integer.class,
+                    idx
+            );
+            assertTrue(count != null && count > 0, "Index " + idx + " must exist");
+        }
+    }
 }

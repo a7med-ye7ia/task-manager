@@ -105,6 +105,8 @@ public class AdminUsersController {
         String contentType = userService.getAvatarContentType(id);
         return ResponseEntity.ok()
                 .header(HttpHeaders.CONTENT_TYPE, contentType)
+                .header(HttpHeaders.CACHE_CONTROL, "private, max-age=3600")
                 .body(bytes);
     }
 }
+

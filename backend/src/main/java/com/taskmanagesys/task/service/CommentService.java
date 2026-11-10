@@ -53,6 +53,7 @@ public class CommentService {
             comment.setSubtask(subtask);
         }
         Comment saved = comments.save(comment); saveMentions(saved, taskId, actorId, request.getMentionedUserIds());
+        activity.logActivity(taskId, actorId, "COMMENT_ADDED", java.util.Map.of("commentId", saved.getId(), "count", 1));
         return response(saved);
     }
     @Transactional

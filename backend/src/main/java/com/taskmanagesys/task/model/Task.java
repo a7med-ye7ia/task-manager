@@ -34,6 +34,9 @@ public class Task {
     @Column(nullable = false, length = 20)
     private TaskStatus status = TaskStatus.TODO;
 
+    @Column(name = "self_reported", nullable = false)
+    private boolean selfReported = false;
+
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "created_by")
     private User createdBy;
@@ -89,6 +92,9 @@ public class Task {
 
     public TaskStatus getStatus() { return status; }
     public void setStatus(TaskStatus status) { this.status = status; }
+
+    public boolean isSelfReported() { return selfReported; }
+    public void setSelfReported(boolean selfReported) { this.selfReported = selfReported; }
 
     public User getCreatedBy() { return createdBy; }
     public void setCreatedBy(User createdBy) { this.createdBy = createdBy; }

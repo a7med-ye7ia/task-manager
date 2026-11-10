@@ -33,6 +33,7 @@ public class SubtaskService {
     private final TaskService taskService;
     private final TaskAccessService taskAccessService;
     private final NotificationService notifications;
+    private final TaskFileService taskFileService;
 
     public SubtaskService(
             TaskRepository taskRepository,
@@ -42,7 +43,7 @@ public class SubtaskService {
             UserRepository userRepository,
             TaskRulesService taskRulesService,
             TaskActivityService taskActivityService,
-            TaskService taskService, TaskAccessService taskAccessService, NotificationService notifications) {
+            TaskService taskService, TaskAccessService taskAccessService, NotificationService notifications, TaskFileService taskFileService) {
         this.taskRepository = taskRepository;
         this.subtaskRepository = subtaskRepository;
         this.subtaskAssigneeRepository = subtaskAssigneeRepository;
@@ -53,6 +54,7 @@ public class SubtaskService {
         this.taskService = taskService;
         this.taskAccessService = taskAccessService;
         this.notifications = notifications;
+        this.taskFileService = taskFileService;
     }
 
     @Transactional
@@ -98,37 +100,29 @@ public class SubtaskService {
             if (!taskMemberRepository.existsByTaskIdAndUserId(taskId, uid)) {
                 TaskMember tm = new TaskMember(task, u, TaskMemberRole.MEMBER, actor);
                 taskMemberRepository.save(tm);
-                taskActivityService.logActivity(taskId, actorId, "MEMBER_ADDED", Map.of(
-                        "userId", uid,
-                        "email", u.getEmail(),
-                        "autoAddedForSubtask", subtask.getId()
-                ));
             }
 
-            SubtaskAssignee sa = new SubtaskAssignee(createdSubtask, u, actor);
+            SubtaskAssignee sa = new SubtaskAssignee(subtask, u, actor);
             subtaskAssigneeRepository.save(sa);
-            notifications.subtaskAssigned(taskId, actorId, u.getId(), subtask.getTitle());
         }
 
-        // BR-16 / BR-18: recalculate task deadline
+        // Recalculate deadline and task status
         List<Subtask> allSubtasks = subtaskRepository.findByTaskId(taskId);
         taskRulesService.recalculateTaskDeadlinesOnSubtasksChanged(task, allSubtasks);
-
-        // BR-21: auto status transitions
         TaskStatus nextStatus = taskRulesService.evaluateAutoTaskStatusOnSubtaskChange(task, allSubtasks);
-        TaskStatus oldTaskStatus = task.getStatus();
         task.setStatus(nextStatus);
         taskRepository.save(task);
-        if (oldTaskStatus != nextStatus) {
-            taskActivityService.logActivity(taskId, actorId, "TASK_STATUS_CHANGED", Map.of("old_status", oldTaskStatus.name(), "new_status", nextStatus.name(), "automatic", true));
-            if (nextStatus == TaskStatus.REVIEW) notifyReviewers(task, actorId);
-        }
 
         taskActivityService.logActivity(taskId, actorId, "SUBTASK_CREATED", Map.of(
                 "subtaskId", createdSubtask.getId(),
                 "title", createdSubtask.getTitle(),
-                "deadline", String.valueOf(createdSubtask.getDeadline())
+                "deadline", String.valueOf(createdSubtask.getDeadline()),
+                "assignees", request.getAssigneeUserIds()
         ));
+
+        for (Long uid : request.getAssigneeUserIds()) {
+            notifications.subtaskAssigned(taskId, actorId, uid, createdSubtask.getTitle());
+        }
 
         final Long createdSubtaskId = createdSubtask.getId();
         return taskService.getTaskDetails(taskId).getSubtasks().stream()
@@ -177,6 +171,7 @@ public class SubtaskService {
             if (subtask.getStatus() == SubtaskStatus.DONE) {
                 taskMemberRepository.findByTaskIdAndRole(task.getId(), TaskMemberRole.LEAD).ifPresent(lead -> notifications.subtaskDone(task.getId(), actorId, lead.getUserId(), subtask.getTitle()));
                 subtask.setDoneAt(Instant.now());
+                taskActivityService.logActivity(taskId, actorId, "SUBTASK_DONE", Map.of("subtaskId", subtaskId, "subtaskTitle", subtask.getTitle(), "count", 1));
             } else {
                 subtask.setDoneAt(null);
             }
@@ -225,6 +220,10 @@ public class SubtaskService {
     }
 
     private void notifyReviewers(Task task, Long actorId) {
+        if (task.isSelfReported()) {
+            notifications.selfReportedReview(task.getId(), actorId, task.getTitle());
+            return;
+        }
         var lead = taskMemberRepository.findByTaskIdAndRole(task.getId(), TaskMemberRole.LEAD);
         if (lead.isPresent()) notifications.taskReview(task.getId(), actorId, lead.get().getUserId(), task.getTitle());
         else userRepository.findByRoleAndStatusAndDeletedAtIsNull(com.taskmanagesys.user.model.Role.MANAGER, UserStatus.ACTIVE).stream().filter(u -> !Objects.equals(u.getId(), actorId)).forEach(u -> notifications.taskReview(task.getId(), actorId, u.getId(), task.getTitle()));
@@ -245,6 +244,7 @@ public class SubtaskService {
             throw new AppException(HttpStatus.BAD_REQUEST, "INVALID_TASK_SUBTASK", "Subtask does not belong to specified task");
         }
 
+        taskFileService.deleteForSubtask(subtaskId);
         subtaskRepository.delete(subtask);
 
         // Recalculate task deadline and status

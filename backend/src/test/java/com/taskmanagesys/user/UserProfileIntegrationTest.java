@@ -100,7 +100,7 @@ class UserProfileIntegrationTest {
             u.setLastName("User");
             u.setEmail("prof_mgr@gmail.com");
             u.setPhone("+201011112222");
-            u.setPasswordHash(passwordEncoder.encode("ManagerPassword123"));
+            u.setPasswordHash(passwordEncoder.encode("ManagerPassword123!"));
             u.setRole(Role.MANAGER);
             u.setStatus(UserStatus.ACTIVE);
             return userRepository.save(u);
@@ -113,7 +113,7 @@ class UserProfileIntegrationTest {
             u.setLastName("User");
             u.setEmail("prof_emp@gmail.com");
             u.setPhone("+201033334444");
-            u.setPasswordHash(passwordEncoder.encode("EmployeePassword123"));
+            u.setPasswordHash(passwordEncoder.encode("EmployeePassword123!"));
             u.setRole(Role.EMPLOYEE);
             u.setStatus(UserStatus.ACTIVE);
             return userRepository.save(u);
@@ -212,8 +212,8 @@ class UserProfileIntegrationTest {
         assertEquals(1, refreshTokenRepository.count());
 
         ChangePasswordRequest req = new ChangePasswordRequest();
-        req.setCurrentPassword("EmployeePassword123");
-        req.setNewPassword("BrandNewPassword123");
+        req.setCurrentPassword("EmployeePassword123!");
+        req.setNewPassword("BrandNewPassword123!");
 
         mockMvc.perform(post("/api/profile/change-password")
                         .header("Authorization", "Bearer " + employeeToken)
@@ -227,7 +227,7 @@ class UserProfileIntegrationTest {
         assertTrue(remainingTokens.stream().allMatch(t -> t.getRevokedAt() != null));
 
         // Can login with new password
-        LoginRequest loginReq = new LoginRequest("prof_emp@gmail.com", "BrandNewPassword123");
+        LoginRequest loginReq = new LoginRequest("prof_emp@gmail.com", "BrandNewPassword123!");
         mockMvc.perform(post("/api/auth/login")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(loginReq)))
@@ -238,8 +238,8 @@ class UserProfileIntegrationTest {
     @Test
     void changePassword_samePassword_failsWithBadRequest() throws Exception {
         ChangePasswordRequest req = new ChangePasswordRequest();
-        req.setCurrentPassword("EmployeePassword123");
-        req.setNewPassword("EmployeePassword123");
+        req.setCurrentPassword("EmployeePassword123!");
+        req.setNewPassword("EmployeePassword123!");
 
         mockMvc.perform(post("/api/profile/change-password")
                         .header("Authorization", "Bearer " + employeeToken)
@@ -252,8 +252,8 @@ class UserProfileIntegrationTest {
     @Test
     void changePassword_wrongCurrentPassword_failsWithBadRequest() throws Exception {
         ChangePasswordRequest req = new ChangePasswordRequest();
-        req.setCurrentPassword("WrongCurrentPassword123");
-        req.setNewPassword("BrandNewPassword123");
+        req.setCurrentPassword("WrongCurrentPassword123!");
+        req.setNewPassword("BrandNewPassword123!");
 
         mockMvc.perform(post("/api/profile/change-password")
                         .header("Authorization", "Bearer " + employeeToken)
@@ -417,3 +417,4 @@ class UserProfileIntegrationTest {
                 .andExpect(status().isForbidden());
     }
 }
+

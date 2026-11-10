@@ -214,3 +214,94 @@ Done: SMTP settings are environment-driven with a Mailpit block enabled by defau
 ## Mail loading and temporary tunnel (done)
 
 Done: verified the normal backend command and current non-secret `.env` resolution (localhost:1025, the configured username, and mail disabled). The backend uses the standard optional `../.env` properties import with environment-variable precedence. Startup logging now emits one safe SMTP/app-base-URL line; disabled delivery no longer reports a no-op as SMTP-sent. Added configurable Vite allowed hosts and proxy target, preserved localhost defaults, and documented HTTPS tunnel setup, cookies, CORS, URL dependencies and real-deployment limitations in `docs/TUNNEL.md`. The frontend production build passed. The backend suite was run after the changes but the newly added unread-count fixture still needs a follow-up run in the current shell session; no backend pass count is claimed.
+
+
+## Improvements & Hardening — Step 0 (done)
+
+Done: updated `docs/SRS.md` with:
+- BR-40: added special character rule ("at least one special character (any character that is not a letter or digit)").
+- BR-47: updated live password requirements feedback to explicitly include special character check.
+- BR-38 & Email content rule: added detailed template specification, specific subject, details block, button link to APP_BASE_URL + path, no emojis, inline CSS table layout, plain-text part.
+- User overview page layout rule: header card limited to avatar, name, badges and actions; overview tab sectioned into Contact, Account, Work with wrapping fields and no overlap or duplicate info.
+
+## Improvements & Hardening — Item 1: Emails (done)
+
+Done:
+- Created `EmailTemplateRenderer.java` implementing responsive HTML (table layout, max width 560px, rounded primary button, accent color #2563eb, footer with app name, no emojis, escaped user text) and plain-text alternatives for every event type in the Section 9 table.
+- Unknown templates fail loudly with `IllegalArgumentException`, eliminating generic fallbacks.
+- Updated `EmailSenderJob.java` to delegate email content generation to `EmailTemplateRenderer`.
+- Updated `NotificationService.java` to inject `TaskRepository` and enrich outbox payloads with `taskTitle`, `priority`, `deadline`, and `actorName`.
+- Added `EmailTemplateRendererTest.java` verifying all 21 templates, subject formatting, details blocks, button links, script escaping, plain-text content, and strict rejection of unknown templates.
+
+## Improvements & Hardening — Item 2: User Overview Page Layout (done)
+
+Done:
+- Updated `UserDetailsPage.tsx` header card to show only avatar, full name, role badge, status badge, and action buttons (Edit details, Deactivate/Restore, Delete), removing duplicated email, phone, and hired date from the top header card.
+- Updated `tab === "overview"` to a responsive sectioned grid:
+  - Section "Contact": Email (with `word-break: break-all` and `overflow-wrap: anywhere` so it never overlaps phone) and Phone.
+  - Section "Account": Role, Status, Hired Date, Deactivated Date (if deleted), and Member Since.
+  - Section "Work": Active Tasks, Tasks Led, and Total Tasks Done summary cards, with direct navigation buttons to Tasks and Report tabs.
+- Polished the viewer profile mode (`/users/:id`) to display role and status badges in the header card and contact details in a cleanly separated section.
+- Added `UserDetailsPage.test.tsx` verifying that email and phone appear strictly once in the Contact section without header duplication and that Contact, Account, and Work sections render properly.
+
+## Improvements & Hardening — Item 3: Password Special Character (done)
+
+Done:
+- Updated backend `ValidationUtils.validatePassword` to require at least one special character (`[^a-zA-Z0-9]`), throwing `VALIDATION_ERROR` ("Password must contain at least one special character") if absent.
+- Updated `UserProfileIntegrationTest.java` test passwords to satisfy the special character rule (`ManagerPassword123!`, `EmployeePassword123!`, etc.).
+- Added `ValidationUtilsPasswordTest.java` testing compliant passwords, missing special character rejection, and edge cases.
+- Created shared `passwordValidation.ts` and updated `SignUpPage.tsx`, `SetPasswordPage.tsx`, `ResetPasswordPage.tsx`, and `ProfilePage.tsx` with immediate client validation for special characters.
+- Updated `PasswordRuleList.tsx` live requirement list with "At least one special character" dynamically switching between unmet (red with X icon) and met (green with Check icon).
+- Updated `.env.example` and `README.md` to document the special character requirement for seed manager and accounts.
+- Added `PasswordRuleList.test.tsx` verifying all 5 password rules and live state transitions for special characters.
+
+## Improvements & Hardening — Item 4: Attach File Buttons (done)
+
+Done:
+- Added `buttonMode?: boolean` and `buttonText?: string` props to `FileDropzone.tsx`.
+- In button mode, replaced the dropzone area with a single "Attach files" button that triggers immediate click on the hidden file chooser input (`<input type="file" multiple ... />`), displaying the shared upload queue (pending files, progress bar, Pause, Resume, Cancel, remove, inline errors, and scrollable container) directly underneath the button.
+- Updated `TaskFormModal.tsx` in both the Add subtask rows and the main task-level file attachment section to render `<FileDropzone buttonMode ... />` directly instead of previous custom attach toggles.
+- Updated `TaskDetailPage.tsx` Add subtask section to render `<FileDropzone buttonMode ... />`.
+- Kept the full dropzone area active exclusively in the main task Files section (`TaskFilesSection.tsx`).
+- Added test in `FileDropzone.test.tsx` verifying that in button mode the dropzone box is hidden, the "Attach files" button renders, and clicking it opens the hidden native file chooser.
+
+## Improvements & Hardening — Item 6: File Card Action Buttons Alignment (done)
+
+Done:
+- Updated `TaskFilesSection.tsx` `FileCard` action buttons so all four actions (Preview, Download, Edit, Delete) render using ONE shared `IconButton` component (`<button type="button">` with width 36px, height 36px, inline-flex, align-items center, justify-content center, padding 0, margin 0, svg display block).
+- Removed asymmetric span and div wrappers so all four buttons share ONE direct container (`.task-file-actions`) with `display: flex; align-items: center; gap: 4px`.
+- Replaced anchor link preview navigation with `onClick` navigation, eliminating vertical misalignment caused by inline element baselines.
+- Updated `index.css` rules for `.task-file-actions` and `.icon-button-shared` ensuring 36x36px identical sizing, box-sizing, and svg display block.
+- Updated `TaskFilesSection.test.tsx` and added test asserting all four buttons share the exact same parent container and exact same class list.
+
+## Improvements & Hardening — Item 5: Security & Performance Audit (done)
+
+Done:
+- Network & Caching: Added `Cache-Control: private, max-age=3600` on authenticated avatar endpoints (`UserController`, `AdminUsersController`, `ProfileController`). Added `loading="lazy"` to avatar `<img>` tags in `UserAvatar.tsx`.
+- Frontend Performance & Code Splitting: Implemented route-level dynamic imports with `React.lazy` and `Suspense` for all pages in `App.tsx`. Configured sensible TanStack Query `staleTime` (1 min) and `gcTime` (5 min). Wrapped heavy file viewers (`PdfViewer`, `DocxViewer`, `CsvViewer`, `MarkdownViewer`, `CodeIdeViewer`, `FileEditor`) with `React.lazy` in `TaskFilePage.tsx`. Updated polling in `AppLayout.tsx`, `TaskDetailPage.tsx`, and `TaskPoolPage.tsx` to pause when `document.hidden`.
+- Nginx & Vite: Configured `frontend/nginx.conf` with Gzip compression, `no-cache` for `index.html`, and 1-year immutable caching for `/assets/`. Configured Vite rollup manual chunks (`vendor-react`, `vendor-query`, `vendor-icons`).
+- Backend & DB Performance: Added `V12__performance_indexes.sql` migration creating indexes for task filtering (`status, priority, deadline`), self-reported tasks, archive dates, task members, comments, time sessions, work history, notifications, and pending email outbox. Configured HikariCP pool settings and Gzip HTTP compression in `application.yml`. Verified `open-in-view: false`.
+- Security Headers: Configured `Content-Security-Policy`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, and `Permissions-Policy` in `SecurityConfig.java`.
+- Added test in `FlywaySchemaTest.java` verifying that V12 performance indexes exist in PostgreSQL schema.
+
+## Improvements & Hardening — Test Compilation Fix (done)
+
+Done:
+- Fixed `EmailSenderJobTest.java` constructor call to supply `EmailTemplateRenderer` mock argument.
+- Fixed `EmailTemplateRendererTest.java` to use `Map.ofEntries` instead of `Map.of` with 12 pairs.
+- Fixed `NotificationServiceTest.java` constructor calls across all test cases to supply `TaskRepository` mock argument.
+- Corrected `V12__performance_indexes.sql` to reference valid existing columns (`tasks(done_at, purge_at)`) and updated `FlywaySchemaTest.java`.
+- Verified frontend production build succeeds cleanly (0 errors).
+
+## Task Details Enhancements — Lead Promotion & Subtask Attachment (done)
+
+Done:
+1. Replaced "Make Lead" text button in `TaskDetailPage.tsx` with a royal `Crown` `IconButton`:
+   - Styled with `.btn-promote-lead` and `@keyframes promote-crown-sparkle`.
+   - On hover, the crown lifts up, scales gracefully, tilts regally, and radiates a golden amber halo glow (`drop-shadow` and amber radial background gradient) to visually express promotion to leadership.
+2. Added paperclip attachment `IconButton` to subtask cards in `TaskDetailPage.tsx`:
+   - Placed directly next to the delete subtask icon with `motion="clip"` and `Paperclip` icon.
+   - Forwarded ref on `TaskFilesSection` via `TaskFilesSectionHandle.openPicker(subtaskId)` so clicking the paperclip opens the file picker directly for that specific subtask.
+   - Kept `FileDropzone` mounted in `TaskFilesSection` so the native file input click triggers synchronously within the user gesture without popup blocking.
+   - Added unit test in `TaskDetailPage.test.tsx` verifying both the Lead promotion button and the subtask paperclip attachment button.
+3. Verified frontend production build passes cleanly (`tsc && vite build` built in 5.29s with 0 errors).

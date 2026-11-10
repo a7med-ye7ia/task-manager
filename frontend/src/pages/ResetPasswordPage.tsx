@@ -5,7 +5,8 @@ import { Card } from '../components/common/Card';
 import { Button } from '../components/common/Button';
 import { PasswordInput } from '../components/common/PasswordInput';
 import { PasswordRuleList } from '../components/common/PasswordRuleList';
-import { CheckCircle2, XCircle, AlertCircle } from 'lucide-react';
+import { CheckCircle2, XCircle } from 'lucide-react';
+import { ErrorNotice } from '../components/common/ErrorNotice';
 
 export const ResetPasswordPage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -34,9 +35,10 @@ export const ResetPasswordPage: React.FC = () => {
     } else if (
       !/[A-Z]/.test(newPassword) ||
       !/[a-z]/.test(newPassword) ||
-      !/[0-9]/.test(newPassword)
+      !/[0-9]/.test(newPassword) ||
+      !/[^a-zA-Z0-9]/.test(newPassword)
     ) {
-      errors.newPassword = 'Password must include uppercase, lowercase, and a number';
+      errors.newPassword = 'New password must include uppercase, lowercase, a number, and a special character';
     }
 
     if (newPassword !== confirmPassword) {
@@ -113,10 +115,8 @@ export const ResetPasswordPage: React.FC = () => {
             <p style={{ color: 'var(--text-muted)', fontSize: '0.9rem', lineHeight: 1.5, marginBottom: '1.75rem' }}>
               Your password has been successfully updated. All previous sessions have been signed out.
             </p>
-            <Link to="/login">
-              <Button variant="primary" size="md" style={{ width: '100%' }}>
-                Sign In
-              </Button>
+            <Link to="/login" className="btn btn-primary" style={{ width: '100%', height: 'var(--input-height)', padding: '0 1.25rem', fontSize: '0.9rem', borderRadius: 'var(--radius-button)' }}>
+              Sign In
             </Link>
           </div>
         ) : isExpiredOrInvalid ? (
@@ -143,10 +143,8 @@ export const ResetPasswordPage: React.FC = () => {
               {generalError ||
                 'This password reset link is invalid or has already expired. Password reset links are valid for 30 minutes.'}
             </p>
-            <Link to="/forgot-password">
-              <Button variant="primary" size="md" style={{ width: '100%' }}>
-                Request New Link
-              </Button>
+            <Link to="/forgot-password" className="btn btn-primary" style={{ width: '100%', height: 'var(--input-height)', padding: '0 1.25rem', fontSize: '0.9rem', borderRadius: 'var(--radius-button)' }}>
+              Request New Link
             </Link>
           </div>
         ) : (
@@ -165,8 +163,7 @@ export const ResetPasswordPage: React.FC = () => {
                   gap: '0.5rem',
                 }}
               >
-                <AlertCircle size={18} style={{ flexShrink: 0 }} />
-                <span>{generalError}</span>
+                <ErrorNotice error={generalError} />
               </div>
             )}
 

@@ -26,4 +26,14 @@ public interface TaskRepository extends JpaRepository<Task, Long> {
            "WHERE m.userId = :userId OR a.userId = :userId " +
            "ORDER BY t.createdAt DESC")
     List<Task> findTasksForUser(@Param("userId") Long userId);
+
+    @Query("SELECT DISTINCT t FROM Task t LEFT JOIN t.members m LEFT JOIN t.subtasks s LEFT JOIN s.assignees a " +
+           "WHERE t.status <> com.taskmanagesys.task.model.TaskStatus.DONE " +
+           "AND (m.userId = :userId OR a.userId = :userId) " +
+           "AND (:query = '' OR LOWER(t.title) LIKE LOWER(CONCAT('%', :query, '%'))) " +
+           "ORDER BY t.createdAt DESC")
+    Page<Task> findTrackableTasks(@Param("userId") Long userId, @Param("query") String query, Pageable pageable);
+
+    @Query("SELECT COUNT(t) FROM Task t WHERE t.createdBy.id = :userId AND t.selfReported = true AND t.status <> com.taskmanagesys.task.model.TaskStatus.DONE")
+    long countActiveSelfReportedTasksForUser(@Param("userId") Long userId);
 }

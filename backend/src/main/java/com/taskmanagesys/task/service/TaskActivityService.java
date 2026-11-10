@@ -6,6 +6,7 @@ import com.taskmanagesys.task.model.TaskActivity;
 import com.taskmanagesys.task.dto.TaskActivityResponse;
 import java.util.List;
 import com.taskmanagesys.task.repository.TaskActivityRepository;
+import com.taskmanagesys.history.service.HistoryService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
@@ -16,10 +17,12 @@ import java.util.Map;
 public class TaskActivityService {
 
     private final TaskActivityRepository activityRepository;
+    private final HistoryService historyService;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public TaskActivityService(TaskActivityRepository activityRepository) {
+    public TaskActivityService(TaskActivityRepository activityRepository, HistoryService historyService) {
         this.activityRepository = activityRepository;
+        this.historyService = historyService;
     }
 
     @Transactional(propagation = Propagation.MANDATORY)
@@ -34,6 +37,7 @@ public class TaskActivityService {
         }
         TaskActivity activity = new TaskActivity(taskId, actorId, action, json);
         activityRepository.save(activity);
+        historyService.recordTaskEvent(taskId, action, details);
     }
 
     @Transactional(readOnly = true)

@@ -103,7 +103,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
     @ExceptionHandler(AppException.class)
     public ResponseEntity<ErrorResponse> handleAppException(AppException ex, WebRequest request) {
-        return typedResponse(ex.getStatus().value(), ex.getCode(), ex.getMessage(), List.of(), request);
+        return typedResponse(ex.getStatus().value(), ex.getCode(), ex.getMessage(), ex.getFieldErrors(), request);
     }
 
     @ExceptionHandler(ResponseStatusException.class)
@@ -123,7 +123,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     public ResponseEntity<ErrorResponse> handleGeneralException(Exception ex, WebRequest request) {
         String traceId = traceId(request);
         log.error("Unhandled exception traceId={}", traceId, ex);
-        return typedResponse(500, "INTERNAL_SERVER_ERROR", "An unexpected error occurred", List.of(), request);
+        return typedResponse(500, "INTERNAL_SERVER_ERROR", "Something went wrong. Try again.", List.of(), request);
     }
 
     private List<FieldErrorItem> fields(List<FieldError> errors) {

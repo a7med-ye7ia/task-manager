@@ -181,6 +181,7 @@ public class UserService {
         prefs.setOnSignupRequest(dto.isOnSignupRequest());
         prefs.setOnTaskCompleted(dto.isOnTaskCompleted());
         prefs.setOnArchiveWarning(dto.isOnArchiveWarning());
+        prefs.setOnSelfReported(dto.isOnSelfReported());
 
         managerEmailPrefsRepository.save(prefs);
     }

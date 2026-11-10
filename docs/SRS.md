@@ -60,7 +60,7 @@ There are two global roles (Manager, Employee) and two per-task roles (Lead, Mem
 | Action | Manager | Lead (own task) | Member (own task) | Other employee |
 | --- | --- | --- | --- | --- |
 | View the task pool and task details | Yes | Yes | Yes | Yes, read-only |
-| Create a task | Yes | – | – | – |
+| Create a task | Yes | – | – | Employee: yes, for a self-reported task only |
 | Edit task fields (title, description, deadline, priority) | Yes | Yes | – | – |
 | Delete a task | Yes | – | – | – |
 | Add or remove members | Yes | Yes | – | – |
@@ -70,8 +70,8 @@ There are two global roles (Manager, Employee) and two per-task roles (Lead, Mem
 | Change a subtask's status | Yes | Yes | Only if assigned to it | – |
 | Tick a checkpoint | Yes | Yes | Task checkpoints: any member. Subtask checkpoints: its assignees. | – |
 | Move a task without subtasks to Review | Yes | Yes | Yes | – |
-| Mark a task Done, or send it back from Review | Yes | Yes | – | – |
-| Restore a task from the archive | Yes | Yes | – | – |
+| Mark a task Done, or send it back from Review | Yes | Yes, except self-reported tasks | – | – |
+| Restore a task from the archive | Yes | Yes, except self-reported tasks | – | – |
 | Read and write comments | Yes | Yes | Yes | – ⚠️ |
 | Edit or delete own comment | Yes | Yes | Yes | – |
 | Delete anyone's comment | Yes | – | – | – |
@@ -79,12 +79,17 @@ There are two global roles (Manager, Employee) and two per-task roles (Lead, Mem
 | Approve or reject sign-up requests | Yes | – | – | – |
 | Edit own profile and password | Yes | Yes | Yes | Yes |
 | Edit own email preferences | Yes (Managers only) | – | – | – |
+| Upload, view and edit text files | Yes | Yes | Uploader may edit own file; other members may view | – |
+| Upload and view a subtask file | Yes | Yes | Its assignees | – |
+| Delete a file | Yes | Yes | Uploader only | – |
+| Use the time tracker | Yes | Yes | Task members; subtask assignees for that subtask | – |
+| View a user's report and time entries | Yes, everyone | – | Own records only | – |
 
 **BR-5.** A Manager is allowed everything a Lead is allowed, on every task, even when not listed as a member.
 
 ## 4. Data model
 
-Fourteen tables cover the whole system. Create all of them in the first Flyway migration (Phase 0) so later phases never reshape the schema. Enumerations are stored as strings with `CHECK` constraints.
+Eighteen tables cover the whole system. Create all of them in the first Flyway migration (Phase 0) so later phases never reshape the schema. Enumerations are stored as strings with `CHECK` constraints.
 
 ```mermaid
 erDiagram
@@ -129,6 +134,7 @@ erDiagram
     boolean on_signup_request
     boolean on_task_completed
     boolean on_archive_warning
+    boolean on_self_reported
   }
   EMAIL_TOKENS {
     bigint id PK
@@ -155,6 +161,7 @@ erDiagram
     string priority "LOW MEDIUM HIGH"
     string status "TODO IN_PROGRESS REVIEW DONE"
     bigint created_by FK
+    boolean self_reported
     timestamp done_at
     timestamp purge_at
     timestamp purge_warning_sent_at
@@ -240,6 +247,54 @@ erDiagram
     string last_error
     timestamp created_at
   }
+  TASK_FILES {
+    bigint id PK
+    bigint task_id FK
+    bigint subtask_id FK
+    bigint uploaded_by FK
+    string original_name
+    string stored_name
+    string content_type
+    bigint size_bytes
+    timestamp created_at
+  }
+  TIME_SESSIONS {
+    bigint id PK
+    bigint user_id FK
+    bigint task_id FK
+    bigint subtask_id FK
+    string task_title
+    timestamp started_at
+    timestamp ended_at
+    timestamp last_heartbeat_at
+    string source
+    string end_reason
+    string note
+    timestamp created_at
+    timestamp updated_at
+    bigint last_edited_by FK
+  }
+  WORK_HISTORY {
+    bigint id PK
+    bigint user_id FK
+    bigint task_id
+    string task_title
+    string priority
+    date deadline
+    string task_role
+    timestamp joined_at
+    timestamp left_at
+    boolean self_reported
+    string final_status
+  }
+  WORK_HISTORY_EVENTS {
+    bigint id PK
+    bigint history_id FK
+    string event_type
+    string subtask_title
+    int count
+    timestamp occurred_at
+  }
 ```
 
 **Constraints and indexes**
@@ -250,8 +305,9 @@ erDiagram
 - A checkpoint belongs to a task. If `subtask_id` is set, that subtask must belong to the same task.
 - `subtasks`, `task_members`, `checkpoints`, `comments`, `task_activity` and `notifications` reference `tasks` with `ON DELETE CASCADE`. Deleting a task removes all of them.
 - `audit_log` is independent of tasks. Its `actor_id` and `target_user_id` use `ON DELETE SET NULL`.
+- `task_files.task_id` and `task_files.subtask_id` cascade with their parent rows. `time_sessions.task_id` has no cascade, and `work_history.task_id` is a historical reference without a foreign key, so purging a task never removes time or history.
 - Progress is computed on read, never stored.
-- Indexes: `tasks(status, deadline)`, `tasks(purge_at)`, `task_members(user_id)`, `subtask_assignees(user_id)`, `comments(task_id, created_at)`, `notifications(user_id, is_read, created_at)`, `email_outbox(status, next_attempt_at)`.
+- Indexes: `tasks(status, deadline)`, `tasks(purge_at)`, `task_members(user_id)`, `subtask_assignees(user_id)`, `comments(task_id, created_at)`, `notifications(user_id, is_read, created_at)`, `email_outbox(status, next_attempt_at)`, `task_files(task_id, subtask_id)`, `time_sessions(user_id, task_id, started_at)`, `work_history(user_id, task_id)` and `work_history_events(history_id, occurred_at)`.
 
 ## 5. Accounts and sign-in
 
@@ -313,7 +369,7 @@ A task is a small project: several people can work on it, it may be split into s
 
 | Item | Fields and rules |
 | --- | --- |
-| Task | Title (required, 3 to 150 characters), description (optional, up to 5000), deadline (date), priority (LOW, MEDIUM or HIGH, default MEDIUM), status, members with one optional Lead. |
+| Task | Title (required, 3 to 150 characters), description (optional, up to 5000), deadline (date), priority (LOW, MEDIUM or HIGH, default MEDIUM), status, `self_reported`, members with one optional Lead. |
 | Subtask | Title (required), description (optional, up to 2000), deadline (required, date), one or more assignees, status (TODO, IN\_PROGRESS, DONE). |
 | Checkpoint | Optional checklist item on a task or on a subtask. Title only (1 to 150 characters), a position, a done flag. No deadline. |
 
@@ -385,6 +441,33 @@ Everyone can see every task, but only the people on a task can act on it or talk
 
 **BR-54. Finding people to add.** A Manager, and the Lead of a task, can search active employees by name to add them as members or to assign them to subtasks of that task. The search works only through a task-scoped endpoint that returns id, full name and avatar only, never email or admin fields, and excludes people already on the task. The Lead cannot use it for other tasks. Members and outsiders cannot use it. Adding people still requires the existing permission (Manager or Lead of that task).
 
+**BR-55. Self-reported tasks.** Any active Employee may create a task for work he is going to do. Title and a deadline today or later are required; BR-20 applies. Description, priority (default MEDIUM), subtasks and checkpoints are optional. The task has `self_reported = true`, starts in TODO, and the creator is its Lead and only Member. The creator may add members and subtasks as Lead. Self-reported tasks appear to everyone in the pool, home cards and task page with a Self-reported badge. The normal flow and Send to review rule remain unchanged, but only a Manager may Mark Done, Send back or Restore such a task, even while its creator is Lead. A self-reported task in REVIEW appears in Managers' Waiting for my review list. Changing its Lead does not clear the flag or the Manager-only approval rule.
+
+- Creation notifies every Manager in-app and emails only Managers whose `emails_enabled` and `on_self_reported` preferences are on. Moving to REVIEW notifies every Manager in-app and emails Managers whose `emails_enabled` and either `on_task_completed` or `on_self_reported` preference is on.
+- The creator may delete the task only while it is TODO and has no time sessions; otherwise only a Manager may delete it. Each Employee may have at most 20 active (not DONE) self-reported tasks.
+
+**BR-56. Files.** Task files and subtask files are separate sections on the task page and in create/edit dialogs. Files selected during creation upload immediately after the task is saved, with per-file progress and errors. Allowed types are JPG, PNG, WebP, PDF, DOCX, XLSX, PPTX, TXT, CSV, ZIP, MP4, WebM, TEX, MD, JSON, XML, YAML (YML), LOG, SQL, JAVA, PY, JS and TS; each file is at most 10 MB except MP4 and WebM, which are at most 50 MB, and a task has at most 30 files and 150 MB total. The server checks signature bytes and rejects SVG, HTML, scripts and executables regardless of extension or Content-Type. The new text types are stored and served as `text/plain; charset=utf-8` with `nosniff`; they are never executed or rendered as HTML.
+
+- Files are stored outside public folders under random names. Original names are sanitized metadata. An authenticated endpoint serves images and PDF inline and all other types as attachments with `X-Content-Type-Options: nosniff`. Visibility matches the task comment readers. A DONE task's files are read-only. Deleting a file or purging/deleting its task removes the disk file; uploads and deletes are activity entries. The daily job removes orphan files.
+
+File viewers: each file type has its own viewer. Images and PDF use media viewers; CSV a table; TXT and LOG a plain document; MD a rendered preview with a Source tab; JSON, XML, YAML, SQL and code an editor-style view; DOCX a document view; XLSX, PPTX and ZIP have no preview and offer Download only. Text-based files (TXT, MD, CSV, JSON, XML, YAML, LOG, SQL, code) can be edited in place by the people who can upload to that task or subtask (uploader, Lead, Manager), never on a DONE task, up to 1 MB. Saving replaces the file content, updates size and an `updated_at`/`edited_by` value, rejects a save with 409 when the file changed since it was opened, and is written to the activity log. Original file names keep Unicode letters (Arabic included) and are sanitized only for path separators, control characters, bidi-override characters, quotes and reserved characters.
+
+Rename. The uploader, the Lead and Managers can rename any file (every type) on a task that is not DONE. Only the base name changes; the extension stays. The new name follows the Unicode name rules and is written to the activity log. Editing the content is separate and exists only for text types.
+
+HTML, SVG and executable scripts (`exe`, `bat`, `cmd`, `sh`, `ps1`) remain rejected. Text previews are safe viewing only; uploaded HTML is never rendered and uploaded code is never run.
+
+**BR-57. Time tracker.** The shift-based session and manual-entry rules are defined by BR-61.
+
+**BR-61. Shift-based time sessions.** A member or subtask assignee starts a server-clock work session, optionally on one subtask. A session is RUNNING, PAUSED or ENDED; one open session (RUNNING or PAUSED) is allowed per user. Starting another task while one is open requires confirmation and stops the open session with its worked time saved. Pause keeps the session open and excludes paused time; a paused session not resumed within 12 hours ends with `PAUSE_TIMEOUT`. Stop always requires confirmation and ends the session permanently. The regular shift is 8 worked hours per Cairo day, overtime is allowed for 2 more hours, and the hard limit is 10 hours. Settings default to `SHIFT_HOURS=8`, `OVERTIME_MAX_HOURS=2`, `PAUSE_TIMEOUT_HOURS=12`, `IDLE_MINUTES=15`, and `SHIFT_ALERT_GRACE_MINUTES=5`. Shift alerts, overtime confirmation, idle pause, heartbeat timeout, Cairo-midnight splitting and manual-entry rules use worked time only; the earlier four-hour reminder is removed.
+
+**BR-62. Error presentation and tracing.** The standard error response may include `traceId`. Unexpected HTTP 500 errors log the full exception with that trace ID and return a short generic message plus the ID. Business exceptions retain their codes and messages. The UI uses the shared ErrorNotice or a field error for every error; network failures say “Cannot reach the server. Check your connection and try again.” and unexpected failures say “Something went wrong. Try again.” with “Reference: <traceId>”.
+
+**BR-58. Work history and retention.** Permanent history independent of task deletion records per user and task the task id and title snapshot, priority, deadline, role, joined and left times, self-reported flag, final status, and dated events: joined, left, subtask done with title, checkpoint ticked count, comment added count without text, sent to review, sent back, done and restored. Changes write history in the same transaction. A migration backfills existing tasks. History and time sessions are retained for two years, then silently removed by the daily job; the 30-day task purge never removes them.
+
+**BR-59. Reports.** A Manager may open any employee's report; an employee may open only his own. From/to dates use Africa/Cairo, `to` cannot precede `from`, the range is at most 366 days, and data cannot precede retention. Include tasks where the person was a member at any time in range and the task was open at any time in range, including archived and purged tasks from history. Show total hours, tasks worked on and completed, subtasks completed, hours per day, and one navigable card/full page per task with title, badges, role, hours, dated subtask/checkpoint/comment/review/send-back/done events and a short generated summary. Browser print/save to PDF uses a print stylesheet; Excel is later.
+
+**BR-60. Profile tabs.** A Manager viewing an employee's details, and an employee viewing his own profile, see Overview, Tasks and Report tabs. Tasks is the existing task list with a date-range filter (a task counts if open at any time in range) plus existing filters. Report follows BR-59. Everyone else keeps the public viewer profile with the Works on list.
+
 **BR-29. Activity log.**
 
 - Each task has an automatic, read-only list of who did what and when, with old and new values for edits.
@@ -411,6 +494,7 @@ The job schedule is read from a setting (default 02:00 Africa/Cairo, overridable
 
 - Warning: for tasks whose `purge_at` is within 3 days and `purge_warning_sent_at` is empty, notify the Lead and every Manager who enabled the archive warning (email and in-app, section 9), then set `purge_warning_sent_at`.
 - Purge: delete tasks whose `purge_at` has passed. The cascade removes subtasks, assignees, members, checkpoints, comments, activity and related notifications. No notification is sent for the deletion itself.
+- Before deleting a purged task, delete its task and subtask files from disk, then delete the task rows. The same job removes orphaned uploaded files, closes stale running time sessions, and silently deletes work history and time-session rows older than two years. It also performs the existing token, outbox and audit retention cleanup.
 
 **BR-33. Audit log.** It records user-management actions: user created, edited, role changed, deactivated, deleted, restored, invite resent, sign-up approved or rejected, and manual deletion of an archived task. The same daily job deletes rows older than 6 months without telling anyone. A user's `hired_at`, `deactivated_at` and `status` live on the `users` row, so purging the log never loses them and a user can be restored at any time.
 
@@ -443,19 +527,23 @@ One event pipeline feeds both channels. Employees always get the emails that con
 | Archive warning, 3 days before deletion | The Lead, and Managers with `on_archive_warning` on | Yes | Yes |
 | A task lost its Lead because a user was deactivated | All Managers | Yes | – |
 | Mentioned in a comment | The mentioned person | Yes | – |
+| Self-reported task created | All Managers | Yes | Managers with emails on and `on_self_reported` on |
+| Self-reported task moves to REVIEW | All Managers | Yes | Managers with emails on and `on_task_completed` or `on_self_reported` on |
 
 When a task has no Lead, the "to the Lead" rows go to the Managers instead, still subject to their preferences.
 
 **BR-36. Manager email preferences** (`manager_email_prefs`, edited on the Manager's own profile).
 
-- `emails_enabled` is the master switch. The three types are new sign-up requests, completed tasks and archive warnings.
+- `emails_enabled` is the master switch. The four types are new sign-up requests, completed tasks, archive warnings and self-reported tasks.
 - A Manager gets an email for an event only if the master switch and that type are both on. ⚠️ Defaults for a new Manager: master on, sign-up requests on, completed tasks off, archive warnings off.
 - Each Manager has their own settings, because there can be several Manager accounts.
 - Preferences never hide the Pending list, the badge or the in-app notifications.
 
 **BR-37. In-app notifications.** A bell in the header shows the unread count. Clicking it opens the latest 20 (paged), each with text, time and a link to the task. Opening one marks it read, and there is a "Mark all as read" action. The unread count is polled every 30 seconds. Types: `SIGNUP_REQUEST`, `TASK_ASSIGNED`, `SUBTASK_ASSIGNED`, `SUBTASK_DONE`, `TASK_REVIEW`, `TASK_DONE`, `TASK_SENT_BACK`, `ARCHIVE_WARNING`, `LEAD_VACANT`, `MENTION`.
 
-**BR-38. Email content.** HTML with a plain-text alternative, the app name, one clear sentence, the task title and a button that links to `APP_BASE_URL` plus the page path. Never include passwords or the full task description. Escape all user-provided text. Subjects are specific, for example "New task assigned: \<title>".
+**BR-38. Email content.** Every email has a specific subject and a body with the event details (who did what, task title, deadline or subtask where relevant), a button, HTML plus plain text, no emojis. HTML with a plain-text alternative, the app name, one clear sentence naming the actor and action, a details block, and a primary button that links to `APP_BASE_URL` plus the exact page path. Never include passwords or the full task description. Escape all user-provided text. Clean, responsive HTML email layout using inline CSS and table layout (max width 560px, accent color from the app tokens, rounded button, no images required). Footer has a small footer with the app name. Subjects are specific, for example "New task assigned: <title>".
+
+**Email content rule.** Every email sent by the system must follow the email template specification corresponding to each event type in the section 9 table, providing clear context, details, and action button.
 
 **BR-39. Limits.** A free Gmail account allows roughly 500 messages a day, which is enough to start. The SMTP provider must be switchable through environment variables only. Deadline reminders and overdue emails are not in the MVP.
 
@@ -468,7 +556,7 @@ When a task has no Lead, the "to the Lead" rows go to the Managers instead, stil
 | First name, last name | Required, 2 to 50 characters, letters in any language (Arabic included), spaces, hyphen and apostrophe. Trimmed. |
 | Email | Required, valid format, up to 254 characters, trimmed and lowercased, unique. Only Gmail addresses (ending in @gmail.com) are accepted for now. This applies to sign-up, adding a user and changing an email. |
 | Phone | Required. Egyptian mobile (`01` followed by 0, 1, 2 or 5, then 8 digits, optionally with `+20`) or an international number in E.164 form. Stored normalized to E.164. |
-| Password | 8 to 64 characters, at least one uppercase letter, one lowercase letter and one digit, not equal to the email, no leading or trailing space. On reset or change it must differ from the current one. |
+| Password | 8 to 64 characters, at least one uppercase letter, one lowercase letter, one digit and at least one special character (any character that is not a letter or digit), not equal to the email, no leading or trailing space. On reset or change it must differ from the current one. |
 | Avatar | JPG, PNG or WebP, up to 2 MB, verified from file content (BR-12). |
 | Task title / description | 3 to 150 characters / up to 5000. |
 | Subtask title / description | 3 to 150 characters / up to 2000. |
@@ -496,7 +584,7 @@ When a task has no Lead, the "to the Lead" rows go to the Managers instead, stil
 
 ## 11. Implementation phases and prompts
 
-Build in eight phases, each ending with something that runs and is tested. The SRS stays the same for every phase and only a short prompt changes, in one place: the phase number.
+Build in twelve phases, each ending with something that runs and is tested. The SRS stays the same for every phase and only a short prompt changes, in one place: the phase number.
 
 **How to hand it to the coding tool**
 
@@ -535,6 +623,10 @@ When you finish: run the tests, start the app, and report what you built, what y
 | 5. Notifications | BR-35 to BR-39: `NotificationService`, every row of the event table, Manager email preferences screen, bell with unread count. | Each event produces the right in-app and email results for the right people, checked with the mail catcher. |
 | 6. Archive and jobs | BR-30 to BR-34: archive on DONE, restore, daily job with warning, purge, audit log cleanup and housekeeping. | The job is tested with a controllable clock, runs safely twice, and restore works inside the 30 days. |
 | 7. Polish and hardening | Re-check every BR, validation messages, responsive layout, empty and error states, the security list in BR-41, README with setup steps, optional demo data script. | A checklist shows each BR with a passing test or a recorded manual check. |
+| 8. History and time tracker | BR-57 and BR-58: server-clock time sessions, heartbeats, idle recovery, manual entries, daily caps, permanent work history and retention cleanup. | A member can track and edit allowed time, stale sessions recover, history survives task purge, and retention is tested. |
+| 9. Files | BR-56: task and subtask uploads, signature validation, authenticated serving, permissions, progress/errors and disk cleanup. | Allowed files upload and download safely, forbidden content is rejected, DONE tasks are read-only, and cleanup removes stored files. |
+| 10. Self-reported tasks | BR-55: Employee creation, limits, Lead/member defaults, Manager-only approval actions, badges and notification preferences. | An Employee can run a self-reported task through review, only a Manager can approve it, limits and notifications work, and tests pass. |
+| 11. Reports and profile tabs | BR-59 and BR-60: history-backed reports, date filters, cards/full pages, print stylesheet, Overview/Tasks/Report profile tabs. | Authorized users see correct range-limited reports and tabs, archived/purged history is included, and print output is usable. |
 
 ## 12. Out of scope and assumptions to confirm
 
@@ -543,7 +635,7 @@ The MVP leaves out the items below. The schema and event pipeline are built so m
 - Deadline reminders and overdue emails.
 - Real-time updates over WebSocket (polling is used).
 - OTP, two-factor sign-in, Google sign-in.
-- File attachments on tasks, task dependencies, reports and exports.
+- Task dependencies and exports.
 - Arabic or right-to-left interface.
 - Fixed teams as a separate concept.
 
@@ -580,15 +672,29 @@ The MVP leaves out the items below. The schema and event pipeline are built so m
 
 **BR-46. Password visibility.** Password input fields include a show/hide toggle icon using lucide-react eye icons.
 
-**BR-47. Password requirements feedback.** Forms that require creating or updating a password show a live requirement list that dynamically changes from red (unmet) with an X icon to green (met) with a check icon.
+**BR-47. Password requirements feedback.** Forms that require creating or updating a password show a live requirement list (including 8-64 characters, uppercase, lowercase, number, at least one special character that is not a letter or digit, not equal to email) that dynamically changes from red (unmet) with an X icon to green (met) with a check icon.
 
 **BR-48. Avatar upload and crop.** Avatar upload provides a circular crop interface (512x512 output) before saving. A menu icon on the avatar opens Edit, Change photo and Delete photo actions; Edit re-crops the retained original. Without an uploaded avatar, show a circular avatar with the first letter of the first and last name. Delete photo asks for confirmation, deletes the stored original and derived file, clears avatar_path, and the default image appears again.
 
 **BR-49. User details page.** Managers can open a user's details page from the users list. It shows the user's profile and every task where they are a member or subtask assignee, including role, deadline, status, priority and computed progress. User editing and deletion happen on this page; the users list provides Preview and deactivate/restore actions.
+
+**User overview page layout.** The header card on /admin/users/:id and the viewer profile displays the avatar, full name, role and status badges, and action buttons only (Edit details, Deactivate/Restore, Delete). The Overview tab displays a clean sectioned layout using a responsive grid with labeled rows and wrapping long values (preventing field overlap): section "Contact" (email, phone), section "Account" (role, status, hired date, deactivated date if any, member since), and section "Work" (active tasks, tasks led, tasks done this month, tracked hours this week when available, and links to the Tasks and Report tabs). All duplicated info between the header card and the overview tab is removed.
 
 **BR-50. Dropdowns.**
 - Native browser select elements are not used. One shared Select component (single choice) is used everywhere: filters, priority, role, status, lead. Build it on an accessible headless library (Radix UI or Headless UI) rather than by hand.
 - It matches the text inputs: same height and rounded corners, a chevron icon, a hover state, a clear focus ring, a soft shadow on the open list, a highlighted selected option, a placeholder, and full keyboard use.
 
 **Shared field errors.** Field validation messages use the shared `FieldError` component/class and are rendered directly beneath the corresponding field on every form. Backend nested field paths are mapped to the matching field; unscoped errors use the form-level error box.
+
+**BR-63. Files.** A file can be renamed by its uploader, the task Lead or a Manager; only the display name changes, the extension remains fixed, and the sanitized name is 1 to 120 characters. The upload area is clickable, keyboard accessible and supports drag and drop. Each upload has its own progress row with cancel, success, or inline error with Retry and Remove. Counts use singular/plural wording.
+
+**BR-64. Shift timer.** Timer controls reflect RUNNING, PAUSED and ENDED state. Restarting a task after a same-day stopped session requires a 3 to 200 character start note. The server stores the note and the session state; no open session shows only Start, RUNNING shows Pause and Stop, PAUSED shows Resume and Stop, and ENDED shows Start.
+
+**BR-65. My time.** The My time page has no task filter. It shows a collapsible manual-entry form and responsive day cards for the last seven Cairo days by default, with per-day totals across all tasks, regular/overtime totals, grouped task entries, notes, and expansion for entries beyond four lines. Its date range uses Last 7 days, Last 30 days and Custom segmented buttons. Custom has Start date, End date and Apply controls; Cairo dates keep in the URL, the end cannot precede the start or be future, the range is at most 366 days and it cannot precede retention.
+
+**BR-66. File interaction and viewing.** The shared file dropzone has idle, drag-over, uploading, success and error states. Uploading uses a theme-filled file icon and overall progress; success flashes a check and errors, including Retry, stay inside the dropzone. Files have accessible Preview, Download, Rename and Delete actions. The Files header provides an Add button and a URL-backed filter for all, task-only and individual subtask files. File viewing uses a full page with file metadata, type-appropriate safe preview, Download, allowed Delete, Back to task and previous/next navigation within the active filter.
+
+**BR-67. Safe file preview endpoints.** A reader may request a 60-second per-user signed URL for one inline-safe file. The signed content endpoint enforces expiry and user/file binding, supports byte ranges, sends `nosniff`, and uses inline disposition only for images, PDF, MP4 and WebM. ZIP entry lists are bounded and sanitized; text preview is limited to 1 MB for TXT, CSV, TEX and MD. Metadata and navigation return only files the caller may read.
+
+**BR-68. File page viewers.** Images, video and audio are shown with native browser viewers. PDF is embedded. TXT, LOG, MD, TEX, JSON, XML and YAML are shown as safe text/code views; MD may be rendered as formatted text without raw HTML support, while TEX is always shown as source and never compiled. CSV is shown as a table. DOCX is rendered in the browser. XLSX, PPTX and ZIP show an information card with a Download button only. LibreOffice conversion is a possible later improvement and is not part of this step. Previews never execute uploaded code or render uploaded HTML/SVG.
 

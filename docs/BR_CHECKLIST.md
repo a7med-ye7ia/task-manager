@@ -58,5 +58,19 @@ Source audit; tests are not claimed as run in this session.
 | BR-52 | Done | public profile and `PersonProfileLink` |
 | BR-53 | Done | task empty/read-only sections |
 | BR-54 | Done | task-scoped candidate endpoint/picker |
+| BR-55 | Done | Self-reported tasks: employee creation, 20-task limit, forced Lead/member, Manager-only Done/Send back/Restore, deletion rules, notifications |
+| BR-56 | Done | Files: uploads, validations, type-specific serving, progress/errors, cleanup |
+| BR-57 | Done | Time tracker: shift-based sessions, heartbeats, idle prompt, manual entries |
+| BR-58 | Done | Work history and permanent event tracking surviving task purge |
+| BR-59 | Done | Reports: date-range filtering, 366-day limit, 2-year retention limit, Cairo-day hour splitting, summary totals, daily hours chart, responsive task cards with full page view, print stylesheet, privacy (no emails) |
+| BR-60 | Done | Profile tabs: Overview, Tasks, Report tabs for Manager viewing employee and employee viewing self; date filter on Tasks; public profile viewer for others |
+| BR-61 | Done | Shift-based time sessions and daily caps |
+| BR-62 | Done | Error presentation and tracing |
+| BR-63 | Done | File renaming and dropzone accessibility |
+| BR-64 | Done | Shift timer start notes and state transitions |
+| BR-65 | Done | My time responsive day cards and custom date range |
+| BR-66 | Done | File interaction and viewing |
+| BR-67 | Done | Safe file preview endpoints |
+| BR-68 | Done | File page viewers |
 
 Remaining certification is limited to the explicit Phase 7 checks marked Partial above and the user-run test commands.

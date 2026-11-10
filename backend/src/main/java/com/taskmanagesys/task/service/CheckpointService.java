@@ -112,7 +112,8 @@ public class CheckpointService {
         taskActivityService.logActivity(taskId, actorId, willBeDone ? "CHECKPOINT_CHECKED" : "CHECKPOINT_UNCHECKED", Map.of(
                 "checkpointId", checkpoint.getId(),
                 "title", checkpoint.getTitle(),
-                "isDone", willBeDone
+                "isDone", willBeDone,
+                "count", willBeDone ? 1 : 0
         ));
 
         return taskService.mapCheckpointToResponse(checkpoint);

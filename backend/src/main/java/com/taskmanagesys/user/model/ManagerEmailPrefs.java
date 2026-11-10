@@ -28,6 +28,9 @@ public class ManagerEmailPrefs implements Persistable<Long> {
     @Column(name = "on_archive_warning", nullable = false)
     private boolean onArchiveWarning = false;
 
+    @Column(name = "on_self_reported", nullable = false)
+    private boolean onSelfReported = true;
+
     @Transient
     private boolean isNew = true;
 
@@ -42,6 +45,7 @@ public class ManagerEmailPrefs implements Persistable<Long> {
         this.onSignupRequest = true;
         this.onTaskCompleted = false;
         this.onArchiveWarning = false;
+        this.onSelfReported = true;
         this.isNew = true;
     }
 
@@ -110,5 +114,13 @@ public class ManagerEmailPrefs implements Persistable<Long> {
 
     public void setOnArchiveWarning(boolean onArchiveWarning) {
         this.onArchiveWarning = onArchiveWarning;
+    }
+
+    public boolean isOnSelfReported() {
+        return onSelfReported;
+    }
+
+    public void setOnSelfReported(boolean onSelfReported) {
+        this.onSelfReported = onSelfReported;
     }
 }

@@ -1,11 +1,8 @@
 package com.taskmanagesys.common.validation;
 
 import com.taskmanagesys.common.error.AppException;
-import com.taskmanagesys.common.error.FieldErrorItem;
 import org.springframework.http.HttpStatus;
 
-import java.util.ArrayList;
-import java.util.List;
 import java.util.regex.Pattern;
 
 public final class ValidationUtils {
@@ -17,6 +14,7 @@ public final class ValidationUtils {
     private static final Pattern UPPERCASE_PATTERN = Pattern.compile("[A-Z]");
     private static final Pattern LOWERCASE_PATTERN = Pattern.compile("[a-z]");
     private static final Pattern DIGIT_PATTERN = Pattern.compile("[0-9]");
+    private static final Pattern SPECIAL_CHAR_PATTERN = Pattern.compile("[^a-zA-Z0-9]");
 
     private ValidationUtils() {}
 
@@ -88,6 +86,10 @@ public final class ValidationUtils {
         if (!DIGIT_PATTERN.matcher(password).find()) {
             throw new AppException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR",
                     "Password must contain at least one digit");
+        }
+        if (!SPECIAL_CHAR_PATTERN.matcher(password).find()) {
+            throw new AppException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR",
+                    "Password must contain at least one special character");
         }
         if (email != null && password.equalsIgnoreCase(email.trim())) {
             throw new AppException(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR",

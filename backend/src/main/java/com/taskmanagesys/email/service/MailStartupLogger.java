@@ -18,6 +18,7 @@ public class MailStartupLogger {
 
     @PostConstruct
     void logConfiguration() {
-        log.info("SMTP mail: host={} port={} username={} enabled={} appBaseUrl={}", host, port, username, enabled, appBaseUrl);
+        String normalizedBaseUrl = appBaseUrl == null ? "" : appBaseUrl.trim().replaceAll("/+$", "");
+        log.info("SMTP mail: host={} port={} username={} enabled={} appBaseUrl={}", host, port, username, enabled, normalizedBaseUrl);
     }
 }

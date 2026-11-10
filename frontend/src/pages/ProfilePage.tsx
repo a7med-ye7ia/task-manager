@@ -1,5 +1,12 @@
+import { CalendarDays } from "lucide-react";
 import React, { useState, useEffect, useRef } from "react";
 import { useAuth } from "../context/AuthContext";
+import { Link, useSearchParams } from "react-router-dom";
+import { getUserTasksApi } from "../services/api";
+import { UserTaskSummary } from "../types";
+import { ProgressBar } from "./TaskPoolPage";
+import { UserReportView } from "../components/reports/UserReportView";
+import { DateRangePicker, QuickRangeKey, computeQuickRangeDates } from "../components/reports/DateRangePicker";
 import {
   updateProfileApi,
   changePasswordApi,
@@ -100,7 +107,8 @@ const samePrefs = (a: ManagerEmailPrefs, b: ManagerEmailPrefs) =>
   a.emailsEnabled === b.emailsEnabled &&
   a.onSignupRequest === b.onSignupRequest &&
   a.onTaskCompleted === b.onTaskCompleted &&
-  a.onArchiveWarning === b.onArchiveWarning;
+  a.onArchiveWarning === b.onArchiveWarning &&
+  a.onSelfReported === b.onSelfReported;
 
 export const ProfilePage: React.FC = () => {
   const {
@@ -174,13 +182,44 @@ export const ProfilePage: React.FC = () => {
     onSignupRequest: true,
     onTaskCompleted: false,
     onArchiveWarning: false,
+    onSelfReported: true,
   });
   const [savedPrefs, setSavedPrefs] = useState<ManagerEmailPrefs | null>(null);
   const [prefsMessage, setPrefsMessage] = useState<Msg>(null);
   const [prefsSubmitting, setPrefsSubmitting] = useState(false);
+  const [params, setParams] = useSearchParams();
+  const tabParam = params.get("tab");
+  const tab = tabParam === "tasks" ? "tasks" : tabParam === "report" ? "report" : "overview";
+  const rangeParam = (params.get("range") || "last30Days") as QuickRangeKey;
+  const defaultDates = computeQuickRangeDates(rangeParam);
+  const fromParam = params.get("from") || defaultDates.from;
+  const toParam = params.get("to") || defaultDates.to;
+  const [userTasks, setUserTasks] = useState<UserTaskSummary[]>([]);
+
+  const handleTabChange = (nextTab: "overview" | "tasks" | "report") => {
+    const next = new URLSearchParams(params);
+    if (nextTab === "overview") next.delete("tab");
+    else next.set("tab", nextTab);
+    setParams(next, { replace: true });
+  };
+
+  const handleRangeChange = (newKey: QuickRangeKey, newFrom: string, newTo: string) => {
+    const next = new URLSearchParams(params);
+    next.set("range", newKey);
+    next.set("from", newFrom);
+    next.set("to", newTo);
+    setParams(next, { replace: true });
+  };
+
 
   useAutoDismissWarning(profileMessage, () => setProfileMessage(null));
   useAutoDismissWarning(prefsMessage, () => setPrefsMessage(null));
+  useEffect(() => {
+    if (profile && tab === "tasks") {
+      getUserTasksApi(profile.id, fromParam, toParam).then(setUserTasks).catch(() => {});
+    }
+  }, [profile?.id, tab, fromParam, toParam]);
+
 
   useEffect(() => {
     if (authUser) {
@@ -426,8 +465,18 @@ export const ProfilePage: React.FC = () => {
     const errs: Record<string, string> = {};
     if (!passwordForm.currentPassword)
       errs.currentPassword = "Current password is required.";
-    if (!passwordForm.newPassword)
+    if (!passwordForm.newPassword) {
       errs.newPassword = "New password is required.";
+    } else if (passwordForm.newPassword.length < 8 || passwordForm.newPassword.length > 64) {
+      errs.newPassword = "Password must be between 8 and 64 characters.";
+    } else if (
+      !/[A-Z]/.test(passwordForm.newPassword) ||
+      !/[a-z]/.test(passwordForm.newPassword) ||
+      !/[0-9]/.test(passwordForm.newPassword) ||
+      !/[^a-zA-Z0-9]/.test(passwordForm.newPassword)
+    ) {
+      errs.newPassword = "Password must include uppercase, lowercase, a number, and a special character.";
+    }
     if (!passwordForm.confirmPassword)
       errs.confirmPassword = "Please confirm the new password.";
     else if (passwordForm.newPassword !== passwordForm.confirmPassword)
@@ -526,6 +575,32 @@ export const ProfilePage: React.FC = () => {
         </p>
       </div>
 
+      <div className="profile-tab-bar">
+        <button
+          type="button"
+          className={`profile-tab-button ${tab === "overview" ? "active" : ""}`}
+          onClick={() => handleTabChange("overview")}
+        >
+          Overview
+        </button>
+        <button
+          type="button"
+          className={`profile-tab-button ${tab === "tasks" ? "active" : ""}`}
+          onClick={() => handleTabChange("tasks")}
+        >
+          Tasks
+        </button>
+        <button
+          type="button"
+          className={`profile-tab-button ${tab === "report" ? "active" : ""}`}
+          onClick={() => handleTabChange("report")}
+        >
+          Report
+        </button>
+      </div>
+
+      {tab === "overview" && (
+        <>
       {/* Profile & Avatar Card */}
       <Card>
         <div
@@ -1082,6 +1157,34 @@ export const ProfilePage: React.FC = () => {
                 />
                 Notify on task archive warning (3 days ahead)
               </label>
+
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.75rem",
+                  cursor: "pointer",
+                  fontSize: "0.9rem",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  disabled={!emailPrefs.emailsEnabled}
+                  checked={emailPrefs.onSelfReported}
+                  onChange={(e) =>
+                    setEmailPrefs({
+                      ...emailPrefs,
+                      onSelfReported: e.target.checked,
+                    })
+                  }
+                  style={{
+                    width: "16px",
+                    height: "16px",
+                    accentColor: "var(--primary)",
+                  }}
+                />
+                Notify on self-reported tasks
+              </label>
             </div>
 
             <Button
@@ -1094,6 +1197,68 @@ export const ProfilePage: React.FC = () => {
             </Button>
           </form>
         </Card>
+      )}
+
+
+        </>
+      )}
+
+      {tab === "tasks" && (
+        <Card>
+          <div style={{ display: "grid", gap: "1rem" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "0.75rem" }}>
+              <h2 style={{ margin: 0 }}>My Tasks</h2>
+              <span style={{ color: "var(--text-muted)", fontSize: "0.9rem" }}>
+                {userTasks.filter(t => t.status !== "DONE").length} active · {userTasks.filter(t => t.status === "DONE").length} done in range
+              </span>
+            </div>
+            <DateRangePicker
+              rangeKey={rangeParam}
+              from={fromParam}
+              to={toParam}
+              onChange={handleRangeChange}
+            />
+            {userTasks.length === 0 ? (
+              <div className="empty-state">
+                <p>No tasks open in the selected date range.</p>
+              </div>
+            ) : (
+              <div style={{ display: "grid", gap: ".6rem" }}>
+                {userTasks.map((t) => (
+                  <Link key={t.id} to={`/tasks/${t.id}`} style={{ color: "inherit", textDecoration: "none" }}>
+                    <div className="user-task-row" style={{ padding: ".85rem", border: "1px solid var(--border-light)", borderRadius: 12, display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1.5fr", gap: ".75rem", alignItems: "center" }}>
+                      <strong>{t.title}</strong>
+                      <Badge variant={t.status === "DONE" ? "success" : "primary"}>{t.status.replace("_", " ")}</Badge>
+                      <div>
+                        <Badge variant={t.priority === "HIGH" ? "danger" : "default"}>{t.priority}</Badge>
+                        <div style={{ fontSize: ".8rem", color: t.overdue ? "var(--danger)" : "var(--text-muted)", marginTop: ".3rem" }}>
+                          <CalendarDays size={13} /> {t.deadline}
+                        </div>
+                      </div>
+                      <div>
+                        <small>{t.userRole}</small>
+                        <div style={{ display: "flex", gap: ".5rem", alignItems: "center" }}>
+                          <div style={{ flex: 1 }}><ProgressBar value={t.progress} /></div>
+                          {t.progress}%
+                        </div>
+                      </div>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
+
+      {tab === "report" && (
+        <UserReportView
+          userId={profile.id}
+          initialFrom={fromParam}
+          initialTo={toParam}
+          initialRangeKey={rangeParam}
+          onRangeChange={handleRangeChange}
+        />
       )}
 
       {avatarToCropSrc && (

@@ -61,9 +61,10 @@ export const SignUpPage: React.FC = () => {
     } else if (
       !/[A-Z]/.test(formData.password) ||
       !/[a-z]/.test(formData.password) ||
-      !/[0-9]/.test(formData.password)
+      !/[0-9]/.test(formData.password) ||
+      !/[^a-zA-Z0-9]/.test(formData.password)
     ) {
-      errors.password = 'Password must include uppercase, lowercase, and a number';
+      errors.password = 'Password must include uppercase, lowercase, a number, and a special character';
     }
 
     if (formData.password !== formData.confirmPassword) {
@@ -144,10 +145,8 @@ export const SignUpPage: React.FC = () => {
             <p style={{ fontSize: '0.9rem', lineHeight: 1.5, marginBottom: '1.25rem', color: '#047857' }}>
               {successMessage}
             </p>
-            <Link to="/login">
-              <Button variant="primary" size="md">
-                Return to Sign In
-              </Button>
+            <Link to="/login" className="btn btn-primary" style={{ height: 'var(--input-height)', padding: '0 1.25rem', fontSize: '0.9rem', borderRadius: 'var(--radius-button)' }}>
+              Return to Sign In
             </Link>
           </div>
         ) : (

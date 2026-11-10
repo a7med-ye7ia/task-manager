@@ -23,6 +23,7 @@ public class TaskResponse {
     private List<SubtaskResponse> subtasks;
     private List<CheckpointResponse> checkpoints; // task-level checkpoints
     private UserSummary createdBy;
+    private boolean selfReported;
     private Instant doneAt;
     private Instant purgeAt;
     private Instant createdAt;
@@ -73,6 +74,9 @@ public class TaskResponse {
 
     public UserSummary getCreatedBy() { return createdBy; }
     public void setCreatedBy(UserSummary createdBy) { this.createdBy = createdBy; }
+
+    public boolean isSelfReported() { return selfReported; }
+    public void setSelfReported(boolean selfReported) { this.selfReported = selfReported; }
 
     public Instant getDoneAt() { return doneAt; }
     public void setDoneAt(Instant doneAt) { this.doneAt = doneAt; }

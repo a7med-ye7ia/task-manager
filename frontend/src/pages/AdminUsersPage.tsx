@@ -324,15 +324,8 @@ export const AdminUsersPage: React.FC = () => {
                         <div style={{ display: 'inline-flex', gap: '0.4rem' }}>
                           {!isDeleted && (
                             <>
-                              <Link to={`/admin/users/${u.id}`}>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                title="Preview user"
-                                style={{ padding: '0.35rem 0.5rem', height: '32px' }}
-                              >
+                              <Link to={`/admin/users/${u.id}`} className="btn btn-outline" title="Preview user" aria-label="Preview user" style={{ padding: '0.35rem 0.5rem', height: '32px', borderRadius: '10px' }}>
                                 <Eye size={14} />
-                              </Button>
                               </Link>
 
                               {u.status === 'INVITED' && (

@@ -1,0 +1,1 @@
+ALTER TABLE time_sessions ADD COLUMN IF NOT EXISTS start_note VARCHAR(200);

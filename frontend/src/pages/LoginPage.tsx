@@ -6,7 +6,8 @@ import { Card } from '../components/common/Card';
 import { Button } from '../components/common/Button';
 import { Input } from '../components/common/Input';
 import { PasswordInput } from '../components/common/PasswordInput';
-import { Mail, LogIn, AlertCircle } from 'lucide-react';
+import { Mail, LogIn } from 'lucide-react';
+import { ErrorNotice } from '../components/common/ErrorNotice';
 
 export const LoginPage: React.FC = () => {
   const { login, isAuthenticated } = useAuth();
@@ -74,8 +75,7 @@ export const LoginPage: React.FC = () => {
               gap: '0.5rem',
             }}
           >
-            <AlertCircle size={18} style={{ flexShrink: 0 }} />
-            <span>{routeState?.notice || sessionNotice || (error === 'Full authentication is required to access this resource' ? 'Your session expired. Sign in again.' : error)}</span>
+            <ErrorNotice error={routeState?.notice || sessionNotice || (error === 'Full authentication is required to access this resource' ? 'Your session expired. Sign in again.' : error || undefined)} />
           </div>
         )}
 

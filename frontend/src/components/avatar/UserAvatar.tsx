@@ -69,6 +69,7 @@ export const UserAvatar: React.FC<UserAvatarProps> = ({
       <img
         src={avatarUrl}
         alt={`${firstName || ''} ${lastName || ''}`}
+        loading="lazy"
         onError={() => setLoadError(true)}
         style={{ width: '100%', height: '100%', objectFit: 'cover' }}
       />

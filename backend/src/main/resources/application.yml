@@ -1,5 +1,9 @@
 server:
   port: ${SERVER_PORT:8080}
+  compression:
+    enabled: true
+    mime-types: text/html,text/xml,text/plain,text/css,text/javascript,application/javascript,application/json,application/xml
+    min-response-size: 1024
 
 spring:
   config:
@@ -8,13 +12,19 @@ spring:
     name: taskmanagesys-backend
   servlet:
     multipart:
-      max-file-size: 2MB
-      max-request-size: 3MB
+      max-file-size: 50MB
+      max-request-size: 60MB
   datasource:
     url: jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:taskmanagesys}
     username: ${DB_USERNAME:postgres}
     password: ${DB_PASSWORD:postgres}
     driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 15
+      minimum-idle: 5
+      idle-timeout: 30000
+      connection-timeout: 20000
+      max-lifetime: 1800000
   jpa:
     hibernate:
       ddl-auto: validate
@@ -54,7 +64,14 @@ app:
   base-url: ${APP_BASE_URL:http://localhost:5173}
   upload-dir: ${UPLOAD_DIR:./uploads}
   jwt-secret: ${JWT_SECRET:supersecretjwtkeythatisatleast256bitslongfortaskmanagementsystem2026}
+  file-view-secret: ${FILE_VIEW_SECRET}
   timezone: Africa/Cairo
+  time:
+    shift-hours: ${SHIFT_HOURS:8}
+    overtime-max-hours: ${OVERTIME_MAX_HOURS:2}
+    pause-timeout-hours: ${PAUSE_TIMEOUT_HOURS:12}
+    idle-minutes: ${IDLE_MINUTES:15}
+    shift-alert-grace-minutes: ${SHIFT_ALERT_GRACE_MINUTES:5}
   mail:
     enabled: ${MAIL_ENABLED:false}
     from: ${APP_MAIL_FROM:${SPRING_MAIL_USERNAME:${MAIL_USERNAME:no-reply@localhost}}}

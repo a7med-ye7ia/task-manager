@@ -4,6 +4,7 @@ import com.taskmanagesys.common.error.AppException;
 import com.taskmanagesys.task.dto.*;
 import com.taskmanagesys.task.model.*;
 import com.taskmanagesys.task.repository.*;
+import com.taskmanagesys.time.repository.TimeSessionRepository;
 import com.taskmanagesys.user.dto.UserSummary;
 import com.taskmanagesys.user.model.Role;
 import com.taskmanagesys.user.model.User;
@@ -11,6 +12,7 @@ import com.taskmanagesys.user.model.UserStatus;
 import com.taskmanagesys.user.repository.UserRepository;
 import com.taskmanagesys.notification.service.NotificationService;
 import com.taskmanagesys.audit.service.AuditLogService;
+import com.taskmanagesys.history.service.HistoryService;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -40,6 +42,9 @@ public class TaskService {
     private final CommentMentionRepository commentMentionRepository;
     private final AuditLogService auditLogService;
     private final TaskReadStateService taskReadStateService;
+    private final HistoryService historyService;
+    private final TaskFileService taskFileService;
+    private final TimeSessionRepository timeSessionRepository;
 
     public TaskService(
             TaskRepository taskRepository,
@@ -49,7 +54,16 @@ public class TaskService {
             CheckpointRepository checkpointRepository,
             UserRepository userRepository,
             TaskRulesService taskRulesService,
-            TaskActivityService taskActivityService, TaskAccessService taskAccessService, CommentRepository commentRepository, NotificationService notifications, CommentMentionRepository commentMentionRepository, AuditLogService auditLogService, TaskReadStateService taskReadStateService) {
+            TaskActivityService taskActivityService,
+            TaskAccessService taskAccessService,
+            CommentRepository commentRepository,
+            NotificationService notifications,
+            CommentMentionRepository commentMentionRepository,
+            AuditLogService auditLogService,
+            TaskReadStateService taskReadStateService,
+            HistoryService historyService,
+            TaskFileService taskFileService,
+            TimeSessionRepository timeSessionRepository) {
         this.taskRepository = taskRepository;
         this.taskMemberRepository = taskMemberRepository;
         this.subtaskRepository = subtaskRepository;
@@ -64,76 +78,151 @@ public class TaskService {
         this.commentMentionRepository = commentMentionRepository;
         this.auditLogService = auditLogService;
         this.taskReadStateService = taskReadStateService;
+        this.historyService = historyService;
+        this.taskFileService = taskFileService;
+        this.timeSessionRepository = timeSessionRepository;
     }
 
     @Transactional
     public TaskResponse createTask(Long actorId, CreateTaskRequest request) {
-        taskAccessService.requireManager(actorId);
         User actor = userRepository.findById(actorId)
                 .orElseThrow(() -> new AppException(HttpStatus.UNAUTHORIZED, "USER_NOT_FOUND", "User not found"));
 
-        List<CreateSubtaskRequest> draftSubtasks = request.getSubtasks() == null ? List.of() : request.getSubtasks();
-        // BR-15: only a task with no subtasks requires a supplied deadline.
-        if (draftSubtasks.isEmpty() && request.getDeadline() == null) {
-            throw new AppException(HttpStatus.BAD_REQUEST, "DEADLINE_REQUIRED", "Task deadline is required");
+        boolean isEmployee = actor.getRole() == Role.EMPLOYEE;
+        boolean isManager = actor.getRole() == Role.MANAGER;
+
+        if (!isEmployee && !isManager) {
+            throw new AppException(HttpStatus.FORBIDDEN, "FORBIDDEN", "Only Employees and Managers can create tasks");
         }
-        if (request.getDeadline() != null) taskRulesService.validateDeadlineNotInPast(request.getDeadline());
-        for (CreateSubtaskRequest draft : draftSubtasks) taskRulesService.validateDeadlineNotInPast(draft.getDeadline());
+
+        boolean isSelfReported = isEmployee || Boolean.TRUE.equals(request.getSelfReported());
+
+        List<CreateSubtaskRequest> draftSubtasks = request.getSubtasks() == null ? List.of() : request.getSubtasks();
+
+        if (isEmployee) {
+            // BR-55: Active limit: at most 20 active (status != DONE) self-reported tasks at a time
+            long activeCount = taskRepository.countActiveSelfReportedTasksForUser(actorId);
+            if (activeCount >= 20) {
+                throw new AppException(HttpStatus.BAD_REQUEST, "SELF_REPORTED_LIMIT_REACHED",
+                        "You cannot have more than 20 active self-reported tasks");
+            }
+
+            // BR-55: Deadline is REQUIRED at creation, must be today or in the future
+            if (request.getDeadline() == null) {
+                throw new AppException(HttpStatus.BAD_REQUEST, "DEADLINE_REQUIRED",
+                        "Task deadline is required for self-reported tasks");
+            }
+            taskRulesService.validateDeadlineNotInPast(request.getDeadline());
+        } else {
+            // BR-15: only a task with no subtasks requires a supplied deadline.
+            if (draftSubtasks.isEmpty() && request.getDeadline() == null) {
+                throw new AppException(HttpStatus.BAD_REQUEST, "DEADLINE_REQUIRED", "Task deadline is required");
+            }
+            if (request.getDeadline() != null) {
+                taskRulesService.validateDeadlineNotInPast(request.getDeadline());
+            }
+        }
+
+        for (CreateSubtaskRequest draft : draftSubtasks) {
+            if (draft.getDeadline() != null) {
+                taskRulesService.validateDeadlineNotInPast(draft.getDeadline());
+            }
+        }
 
         Task task = new Task();
         task.setTitle(request.getTitle().trim());
         task.setDescription(request.getDescription() != null ? request.getDescription().trim() : null);
-        LocalDate latestSubtaskDeadline = draftSubtasks.stream().map(CreateSubtaskRequest::getDeadline).max(LocalDate::compareTo).orElse(null);
+        LocalDate latestSubtaskDeadline = draftSubtasks.stream()
+                .map(CreateSubtaskRequest::getDeadline)
+                .filter(Objects::nonNull)
+                .max(LocalDate::compareTo)
+                .orElse(null);
         task.setDeadline(latestSubtaskDeadline == null ? request.getDeadline() : (request.getDeadline() != null && request.getDeadline().isAfter(latestSubtaskDeadline) ? request.getDeadline() : latestSubtaskDeadline));
         task.setDeadlineManual(false);
         task.setPriority(request.getPriority());
         task.setStatus(TaskStatus.TODO);
         task.setCreatedBy(actor);
+        task.setSelfReported(isSelfReported);
         task = taskRepository.save(task);
 
-        // Members (BR-24)
-        Set<Long> memberIds = new HashSet<>(request.getMemberUserIds());
-        if (request.getLeadUserId() != null) {
-            memberIds.add(request.getLeadUserId());
-        }
-
-        for (Long uid : memberIds) {
-            User u = userRepository.findById(uid)
-                    .orElseThrow(() -> new AppException(HttpStatus.BAD_REQUEST, "USER_NOT_FOUND", "Selected employee not found: " + uid));
-            if (u.getStatus() != UserStatus.ACTIVE || u.getDeletedAt() != null) {
-                throw new AppException(HttpStatus.BAD_REQUEST, "USER_NOT_ACTIVE", "Employee must be active: " + u.getEmail());
-            }
-            TaskMemberRole role = Objects.equals(uid, request.getLeadUserId()) ? TaskMemberRole.LEAD : TaskMemberRole.MEMBER;
-            TaskMember tm = new TaskMember(task, u, role, actor);
+        if (isEmployee) {
+            // BR-55: The creator is automatically the Lead and the ONLY member.
+            TaskMember tm = new TaskMember(task, actor, TaskMemberRole.LEAD, actor);
             taskMemberRepository.save(tm);
+        } else {
+            if (request.getMemberUserIds() == null || request.getMemberUserIds().isEmpty()) {
+                throw new AppException(HttpStatus.BAD_REQUEST, "MEMBER_REQUIRED", "At least one employee must be selected");
+            }
+            Set<Long> memberIds = new HashSet<>(request.getMemberUserIds());
+            if (request.getLeadUserId() != null) {
+                memberIds.add(request.getLeadUserId());
+            }
+
+            for (Long uid : memberIds) {
+                User u = userRepository.findById(uid)
+                        .orElseThrow(() -> new AppException(HttpStatus.BAD_REQUEST, "USER_NOT_FOUND", "Selected employee not found: " + uid));
+                if (u.getStatus() != UserStatus.ACTIVE || u.getDeletedAt() != null) {
+                    throw new AppException(HttpStatus.BAD_REQUEST, "USER_NOT_ACTIVE", "Employee must be active: " + u.getEmail());
+                }
+                TaskMemberRole role = Objects.equals(uid, request.getLeadUserId()) ? TaskMemberRole.LEAD : TaskMemberRole.MEMBER;
+                TaskMember tm = new TaskMember(task, u, role, actor);
+                taskMemberRepository.save(tm);
+            }
         }
 
-        // Draft subtasks and checkpoints are saved in this same transaction.
+        // Draft subtasks
         for (CreateSubtaskRequest draft : draftSubtasks) {
-            if (draft.getAssigneeUserIds() == null || draft.getAssigneeUserIds().isEmpty()) {
-                throw new AppException(HttpStatus.BAD_REQUEST, "ASSIGNEE_REQUIRED", "Every subtask must have at least one assignee");
-            }
             Subtask subtask = new Subtask();
-            subtask.setTask(task); subtask.setTitle(draft.getTitle().trim());
+            subtask.setTask(task);
+            subtask.setTitle(draft.getTitle().trim());
             subtask.setDescription(draft.getDescription() == null ? null : draft.getDescription().trim());
-            subtask.setDeadline(draft.getDeadline()); subtask.setStatus(SubtaskStatus.TODO);
+            subtask.setDeadline(draft.getDeadline());
+            subtask.setStatus(SubtaskStatus.TODO);
             subtask = subtaskRepository.save(subtask);
-            for (Long userId : new HashSet<>(draft.getAssigneeUserIds())) {
-                User assignee = userRepository.findById(userId).orElseThrow(() -> new AppException(HttpStatus.BAD_REQUEST, "USER_NOT_FOUND", "Selected employee not found: " + userId));
-                if (assignee.getStatus() != UserStatus.ACTIVE || assignee.getDeletedAt() != null) throw new AppException(HttpStatus.BAD_REQUEST, "USER_NOT_ACTIVE", "Assignee must be active");
-                if (!taskMemberRepository.existsByTaskIdAndUserId(task.getId(), userId)) taskMemberRepository.save(new TaskMember(task, assignee, TaskMemberRole.MEMBER, actor));
-                subtaskAssigneeRepository.save(new SubtaskAssignee(subtask, assignee, actor));
+
+            if (isEmployee) {
+                subtaskAssigneeRepository.save(new SubtaskAssignee(subtask, actor, actor));
+            } else {
+                if (draft.getAssigneeUserIds() == null || draft.getAssigneeUserIds().isEmpty()) {
+                    throw new AppException(HttpStatus.BAD_REQUEST, "ASSIGNEE_REQUIRED", "Every subtask must have at least one assignee");
+                }
+                for (Long userId : new HashSet<>(draft.getAssigneeUserIds())) {
+                    User assignee = userRepository.findById(userId)
+                            .orElseThrow(() -> new AppException(HttpStatus.BAD_REQUEST, "USER_NOT_FOUND", "Selected employee not found: " + userId));
+                    if (assignee.getStatus() != UserStatus.ACTIVE || assignee.getDeletedAt() != null) {
+                        throw new AppException(HttpStatus.BAD_REQUEST, "USER_NOT_ACTIVE", "Assignee must be active");
+                    }
+                    if (!taskMemberRepository.existsByTaskIdAndUserId(task.getId(), userId)) {
+                        taskMemberRepository.save(new TaskMember(task, assignee, TaskMemberRole.MEMBER, actor));
+                    }
+                    subtaskAssigneeRepository.save(new SubtaskAssignee(subtask, assignee, actor));
+                }
             }
         }
-        if (request.getCheckpoints() != null) for (CreateCheckpointRequest draft : request.getCheckpoints()) {
-            Checkpoint checkpoint = new Checkpoint(); checkpoint.setTask(task); checkpoint.setTitle(draft.getTitle().trim()); checkpointRepository.save(checkpoint);
+
+        if (request.getCheckpoints() != null) {
+            for (CreateCheckpointRequest draft : request.getCheckpoints()) {
+                Checkpoint checkpoint = new Checkpoint();
+                checkpoint.setTask(task);
+                checkpoint.setTitle(draft.getTitle().trim());
+                checkpointRepository.save(checkpoint);
+            }
         }
 
         taskActivityService.logActivity(task.getId(), actorId, "TASK_CREATED", Map.of(
                 "title", task.getTitle(),
                 "priority", task.getPriority().name(),
-                "deadline", String.valueOf(task.getDeadline())
+                "deadline", String.valueOf(task.getDeadline()),
+                "selfReported", task.isSelfReported()
         ));
+
+        historyService.record(task.getId(), actorId, "TASK_CREATED",
+                task.isSelfReported() ? "Self-reported task created" : "Task created",
+                null, task.getTitle());
+
+        if (task.isSelfReported()) {
+            notifications.selfReportedCreated(task.getId(), actorId, actor.getFirstName() + " " + actor.getLastName(), task.getTitle());
+        }
 
         return getTaskDetails(task.getId());
     }
@@ -185,10 +274,17 @@ public class TaskService {
     public TaskResponse changeStatus(Long taskId, Long actorId, ChangeTaskStatusRequest request) {
         Task taskForAccess = getTaskEntity(taskId);
         if (taskForAccess.getStatus() == TaskStatus.DONE) {
-            taskAccessService.requireManagerOrLead(taskId, actorId);
+            taskAccessService.requireRestorePermission(taskForAccess, actorId);
             throw new AppException(HttpStatus.CONFLICT, "TASK_ARCHIVED", "Archived tasks can only be restored");
         }
-        if (request.getStatus() == TaskStatus.DONE || taskForAccess.getStatus() == TaskStatus.DONE || (taskForAccess.getStatus() == TaskStatus.REVIEW && request.getStatus() == TaskStatus.IN_PROGRESS)) taskAccessService.requireManagerOrLead(taskId, actorId); else taskAccessService.requireMember(taskId, actorId);
+        if (request.getStatus() == TaskStatus.DONE) {
+            taskAccessService.requireDonePermission(taskForAccess, actorId);
+        } else if (taskForAccess.getStatus() == TaskStatus.REVIEW && request.getStatus() == TaskStatus.IN_PROGRESS) {
+            taskAccessService.requireSendBackPermission(taskForAccess, actorId);
+        } else {
+            taskAccessService.requireMember(taskId, actorId);
+        }
+
         Task task = taskForAccess;
         TaskStatus oldStatus = task.getStatus();
         TaskStatus newStatus = request.getStatus();
@@ -240,14 +336,29 @@ public class TaskService {
             details.put("reason", request.getReason());
         }
         taskActivityService.logActivity(taskId, actorId, "TASK_STATUS_CHANGED", details);
-        if (newStatus == TaskStatus.DONE) notifications.taskDone(taskId, actorId, task.getTitle());
-        if (newStatus == TaskStatus.REVIEW) {
-            var lead = taskMemberRepository.findByTaskIdAndRole(taskId, TaskMemberRole.LEAD);
-            if (lead.isPresent()) notifications.taskReview(taskId, actorId, lead.get().getUserId(), task.getTitle());
-            else userRepository.findByRoleAndStatusAndDeletedAtIsNull(Role.MANAGER, UserStatus.ACTIVE).stream().filter(u -> !Objects.equals(u.getId(), actorId)).forEach(u -> notifications.taskReview(taskId, actorId, u.getId(), task.getTitle()));
+        historyService.record(taskId, actorId, "STATUS_CHANGE",
+                "Status changed from " + oldStatus + " to " + newStatus,
+                oldStatus.name(), newStatus.name());
+
+        if (newStatus == TaskStatus.DONE) {
+            notifications.taskDone(taskId, actorId, task.getTitle());
         }
-        if (oldStatus == TaskStatus.REVIEW && newStatus == TaskStatus.IN_PROGRESS) notifications.taskSentBack(taskId, actorId, task.getTitle());
+        if (newStatus == TaskStatus.REVIEW) {
+            if (task.isSelfReported()) {
+                notifications.selfReportedReview(taskId, actorId, task.getTitle());
+            } else {
+                var lead = taskMemberRepository.findByTaskIdAndRole(taskId, TaskMemberRole.LEAD);
+                if (lead.isPresent()) {
+                    notifications.taskReview(taskId, actorId, lead.get().getUserId(), task.getTitle());
+                } else {
+                    userRepository.findByRoleAndStatusAndDeletedAtIsNull(Role.MANAGER, UserStatus.ACTIVE).stream()
+                            .filter(u -> !Objects.equals(u.getId(), actorId))
+                            .forEach(u -> notifications.taskReview(taskId, actorId, u.getId(), task.getTitle()));
+                }
+            }
+        }
         if (oldStatus == TaskStatus.REVIEW && newStatus == TaskStatus.IN_PROGRESS) {
+            notifications.taskSentBack(taskId, actorId, task.getTitle(), request.getReason());
             Comment reasonComment = new Comment();
             reasonComment.setTask(task);
             reasonComment.setAuthor(userRepository.findById(actorId).orElseThrow());
@@ -273,6 +384,7 @@ public class TaskService {
         task.setStatus(TaskStatus.REVIEW);
         taskRepository.save(task);
         taskActivityService.logActivity(taskId, actorId, "TASK_SENT_TO_REVIEW", Map.of("old_status", old.name()));
+        historyService.record(taskId, actorId, "STATUS_CHANGE", "Task sent to review", old.name(), TaskStatus.REVIEW.name());
         notifyReviewers(task, actorId);
         return getTaskDetails(taskId);
     }
@@ -287,18 +399,22 @@ public class TaskService {
     @Transactional
     public TaskResponse sendBack(Long taskId, Long actorId, SendBackTaskRequest request) {
         Task task = getTaskEntity(taskId);
-        taskAccessService.requireManagerOrLead(taskId, actorId);
+        taskAccessService.requireSendBackPermission(task, actorId);
         if (task.getStatus() != TaskStatus.REVIEW) {
             throw new AppException(HttpStatus.CONFLICT, "INVALID_STATUS", "Only tasks in review can be sent back");
         }
         String reason = request.getReason() == null ? "" : request.getReason().trim();
-        if (reason.length() < 3) throw new AppException(HttpStatus.BAD_REQUEST, "REASON_REQUIRED", "A reason comment is required");
+        if (reason.length() < 3) {
+            throw new AppException(HttpStatus.BAD_REQUEST, "REASON_REQUIRED", "A reason comment is required");
+        }
         Set<Long> chosenSubtasks = new HashSet<>(request.getSubtaskIds());
         Set<Long> chosenCheckpoints = new HashSet<>(request.getCheckpointIds());
         List<Subtask> subtasks = subtaskRepository.findByTaskId(taskId);
         for (Subtask subtask : subtasks) {
             if (chosenSubtasks.contains(subtask.getId())) {
-                if (subtask.getStatus() != SubtaskStatus.DONE) throw new AppException(HttpStatus.BAD_REQUEST, "SUBTASK_NOT_DONE", "Only DONE subtasks can be reopened");
+                if (subtask.getStatus() != SubtaskStatus.DONE) {
+                    throw new AppException(HttpStatus.BAD_REQUEST, "SUBTASK_NOT_DONE", "Only DONE subtasks can be reopened");
+                }
                 subtask.setStatus(SubtaskStatus.TODO);
                 subtask.setDoneAt(null);
                 subtaskRepository.save(subtask);
@@ -311,7 +427,9 @@ public class TaskService {
         List<Checkpoint> checkpoints = checkpointRepository.findByTaskIdAndSubtaskIdIsNullOrderByPositionAscIdAsc(taskId);
         for (Checkpoint checkpoint : checkpoints) {
             if (chosenCheckpoints.contains(checkpoint.getId())) {
-                if (!checkpoint.isDone()) throw new AppException(HttpStatus.BAD_REQUEST, "CHECKPOINT_NOT_DONE", "Only ticked checkpoints can be reopened");
+                if (!checkpoint.isDone()) {
+                    throw new AppException(HttpStatus.BAD_REQUEST, "CHECKPOINT_NOT_DONE", "Only ticked checkpoints can be reopened");
+                }
                 checkpoint.setDone(false);
                 checkpoint.setDoneBy(null);
                 checkpoint.setDoneAt(null);
@@ -330,6 +448,7 @@ public class TaskService {
         comment.setBody(reason);
         commentRepository.save(comment);
         taskActivityService.logActivity(taskId, actorId, "TASK_SENT_BACK", Map.of("reason", reason, "subtaskIds", chosenSubtasks, "checkpointIds", chosenCheckpoints));
+        historyService.record(taskId, actorId, "STATUS_CHANGE", "Task sent back to IN_PROGRESS. Reason: " + reason, TaskStatus.REVIEW.name(), TaskStatus.IN_PROGRESS.name());
         notifications.taskSentBack(taskId, actorId, task.getTitle(), reason);
         return getTaskDetails(taskId);
     }
@@ -337,35 +456,59 @@ public class TaskService {
     @Transactional
     public TaskResponse restoreTask(Long taskId, Long actorId, TaskStatus targetStatus) {
         Task task = getTaskEntity(taskId);
-        taskAccessService.requireManagerOrLead(taskId, actorId);
-        if (task.getStatus() != TaskStatus.DONE) throw new AppException(HttpStatus.CONFLICT, "TASK_NOT_ARCHIVED", "Only archived tasks can be restored");
-        if (task.getPurgeAt() != null && task.getPurgeAt().isBefore(Instant.now())) throw new AppException(HttpStatus.CONFLICT, "TASK_PURGE_EXPIRED", "This archived task can no longer be restored");
-        if (targetStatus == null || targetStatus == TaskStatus.DONE) throw new AppException(HttpStatus.BAD_REQUEST, "INVALID_RESTORE_STATUS", "Restore status must be TODO, IN_PROGRESS or REVIEW");
-        task.setDoneAt(null); task.setPurgeAt(null); task.setPurgeWarningSentAt(null); task.setStatus(targetStatus); taskRepository.save(task);
+        taskAccessService.requireRestorePermission(task, actorId);
+        if (task.getStatus() != TaskStatus.DONE) {
+            throw new AppException(HttpStatus.CONFLICT, "TASK_NOT_ARCHIVED", "Only archived tasks can be restored");
+        }
+        if (task.getPurgeAt() != null && task.getPurgeAt().isBefore(Instant.now())) {
+            throw new AppException(HttpStatus.CONFLICT, "TASK_PURGE_EXPIRED", "This archived task can no longer be restored");
+        }
+        if (targetStatus == null || targetStatus == TaskStatus.DONE) {
+            throw new AppException(HttpStatus.BAD_REQUEST, "INVALID_RESTORE_STATUS", "Restore status must be TODO, IN_PROGRESS or REVIEW");
+        }
+        task.setDoneAt(null);
+        task.setPurgeAt(null);
+        task.setPurgeWarningSentAt(null);
+        task.setStatus(targetStatus);
+        taskRepository.save(task);
         taskActivityService.logActivity(taskId, actorId, "TASK_RESTORED", Map.of("status", targetStatus.name()));
+        historyService.record(taskId, actorId, "STATUS_CHANGE", "Task restored to " + targetStatus, TaskStatus.DONE.name(), targetStatus.name());
         taskMemberRepository.findByTaskId(taskId).stream().map(TaskMember::getUserId).distinct().forEach(id -> notifications.taskRestored(taskId, actorId, id, task.getTitle()));
         return getTaskDetails(taskId);
     }
 
     private void notifyReviewers(Task task, Long actorId) {
+        if (task.isSelfReported()) {
+            notifications.selfReportedReview(task.getId(), actorId, task.getTitle());
+            return;
+        }
         var lead = taskMemberRepository.findByTaskIdAndRole(task.getId(), TaskMemberRole.LEAD);
-        if (lead.isPresent()) notifications.taskReview(task.getId(), actorId, lead.get().getUserId(), task.getTitle());
-        else userRepository.findByRoleAndStatusAndDeletedAtIsNull(Role.MANAGER, UserStatus.ACTIVE).stream().filter(u -> !Objects.equals(u.getId(), actorId)).forEach(u -> notifications.taskReview(task.getId(), actorId, u.getId(), task.getTitle()));
+        if (lead.isPresent()) {
+            notifications.taskReview(task.getId(), actorId, lead.get().getUserId(), task.getTitle());
+        } else {
+            userRepository.findByRoleAndStatusAndDeletedAtIsNull(Role.MANAGER, UserStatus.ACTIVE).stream()
+                    .filter(u -> !Objects.equals(u.getId(), actorId))
+                    .forEach(u -> notifications.taskReview(task.getId(), actorId, u.getId(), task.getTitle()));
+        }
     }
 
     @Transactional
     public void deleteTask(Long taskId, Long actorId) {
-        taskAccessService.requireManager(actorId);
         Task task = getTaskEntity(taskId);
-          auditLogService.record(actorId, null, "TASK_DELETED", Map.of(
-                  "entityType", "TASK",
-                  "entityId", task.getId(),
-                  "taskId", task.getId(),
-                  "title", task.getTitle(),
-                  "actorId", actorId));
+        boolean hasSessions = timeSessionRepository.existsByTaskId(taskId);
+        taskAccessService.requireDeletePermission(task, actorId, hasSessions);
+
+        historyService.recordTaskDeleted(task, actorId);
+        auditLogService.record(actorId, null, "TASK_DELETED", Map.of(
+                "entityType", "TASK",
+                "entityId", task.getId(),
+                "taskId", task.getId(),
+                "title", task.getTitle(),
+                "actorId", actorId));
+        taskFileService.deleteForTask(taskId);
         // Cascades remove subtasks, members, checkpoints, activities
         taskRepository.delete(task);
-          taskRepository.flush();
+        taskRepository.flush();
     }
 
     @Transactional(readOnly = true)
@@ -383,14 +526,44 @@ public class TaskService {
     }
 
     @Transactional(readOnly = true)
-    public Page<TaskResponse> getTaskPool(Long userId, String search, TaskStatus status, TaskPriority priority, java.time.LocalDate deadlineFrom, java.time.LocalDate deadlineTo, boolean myTasks, boolean iLead, boolean archived, String sort, Pageable pageable) {
+    public Page<TaskResponse> getTaskPool(Long userId, String search, TaskStatus status, TaskPriority priority, LocalDate deadlineFrom, LocalDate deadlineTo, boolean myTasks, boolean iLead, boolean archived, String sort, Pageable pageable) {
+        boolean isManager = taskAccessService.manager(userId);
         List<Task> source = taskRepository.findAll();
-        source = source.stream().filter(task -> archived ? task.getStatus() == TaskStatus.DONE : task.getStatus() != TaskStatus.DONE).filter(task -> search == null || search.isBlank() || task.getTitle().toLowerCase().contains(search.toLowerCase())).filter(task -> status == null || task.getStatus() == status).filter(task -> priority == null || task.getPriority() == priority).filter(task -> deadlineFrom == null || !task.getDeadline().isBefore(deadlineFrom)).filter(task -> deadlineTo == null || !task.getDeadline().isAfter(deadlineTo)).filter(task -> !myTasks || taskMemberRepository.existsByTaskIdAndUserId(task.getId(), userId) || subtaskRepository.findByTaskId(task.getId()).stream().anyMatch(s -> subtaskAssigneeRepository.existsBySubtaskIdAndUserId(s.getId(), userId))).filter(task -> !iLead || taskMemberRepository.findByTaskIdAndUserId(task.getId(), userId).map(m -> m.getRole() == TaskMemberRole.LEAD).orElse(false)).sorted((a,b) -> { if ("priority".equalsIgnoreCase(sort)) return a.getPriority().compareTo(b.getPriority()); if ("created".equalsIgnoreCase(sort)) return b.getCreatedAt().compareTo(a.getCreatedAt()); return a.getDeadline().compareTo(b.getDeadline()); }).toList();
-        int start = Math.min((int) pageable.getOffset(), source.size()); int end = Math.min(start + pageable.getPageSize(), source.size());
-        List<TaskResponse> content = source.subList(start, end).stream().map(t -> {
-            TaskResponse response = mapToResponse(t, subtaskRepository.findByTaskId(t.getId()), checkpointRepository.findByTaskIdAndSubtaskIdIsNullOrderByPositionAscIdAsc(t.getId()), taskMemberRepository.findByTaskId(t.getId()));
-            return response;
-        }).toList();
+        source = source.stream()
+                .filter(task -> archived ? task.getStatus() == TaskStatus.DONE : task.getStatus() != TaskStatus.DONE)
+                .filter(task -> search == null || search.isBlank() || task.getTitle().toLowerCase().contains(search.toLowerCase()))
+                .filter(task -> status == null || task.getStatus() == status)
+                .filter(task -> priority == null || task.getPriority() == priority)
+                .filter(task -> deadlineFrom == null || !task.getDeadline().isBefore(deadlineFrom))
+                .filter(task -> deadlineTo == null || !task.getDeadline().isAfter(deadlineTo))
+                .filter(task -> {
+                    if (!myTasks) return true;
+                    boolean isMember = taskMemberRepository.existsByTaskIdAndUserId(task.getId(), userId) ||
+                            subtaskRepository.findByTaskId(task.getId()).stream().anyMatch(s -> subtaskAssigneeRepository.existsBySubtaskIdAndUserId(s.getId(), userId));
+                    if (isMember) return true;
+                    // If Manager and task in REVIEW is self-reported, include it in manager review tasks
+                    if (isManager && task.getStatus() == TaskStatus.REVIEW && task.isSelfReported()) return true;
+                    return false;
+                })
+                .filter(task -> {
+                    if (!iLead) return true;
+                    return taskMemberRepository.findByTaskIdAndUserId(task.getId(), userId)
+                            .map(m -> m.getRole() == TaskMemberRole.LEAD)
+                            .orElse(false);
+                })
+                .sorted((a, b) -> {
+                    if ("priority".equalsIgnoreCase(sort)) return a.getPriority().compareTo(b.getPriority());
+                    if ("created".equalsIgnoreCase(sort)) return b.getCreatedAt().compareTo(a.getCreatedAt());
+                    return a.getDeadline().compareTo(b.getDeadline());
+                })
+                .toList();
+
+        int start = Math.min((int) pageable.getOffset(), source.size());
+        int end = Math.min(start + pageable.getPageSize(), source.size());
+        List<TaskResponse> content = source.subList(start, end).stream().map(t ->
+                mapToResponse(t, subtaskRepository.findByTaskId(t.getId()), checkpointRepository.findByTaskIdAndSubtaskIdIsNullOrderByPositionAscIdAsc(t.getId()), taskMemberRepository.findByTaskId(t.getId()))
+        ).toList();
+
         Map<Long, Long> unreadCounts = taskReadStateService.unreadCounts(content.stream().map(TaskResponse::getId).toList(), userId);
         Map<Long, Long> mentionCounts = taskReadStateService.unreadMentionCounts(content.stream().map(TaskResponse::getId).toList(), userId);
         content.forEach(response -> {
@@ -411,21 +584,52 @@ public class TaskService {
 
     @Transactional
     public TaskResponse addMember(Long taskId, Long actorId, Long userId) {
-        taskAccessService.requireManagerOrLead(taskId, actorId); Task task = getTaskEntity(taskId); ensureWritable(task);
-        if (!taskMemberRepository.existsByTaskIdAndUserId(taskId, userId)) { User user = userRepository.findById(userId).orElseThrow(() -> new AppException(HttpStatus.BAD_REQUEST, "USER_NOT_FOUND", "User not found")); taskMemberRepository.save(new TaskMember(task, user, TaskMemberRole.MEMBER, userRepository.getReferenceById(actorId))); taskActivityService.logActivity(taskId, actorId, "MEMBER_ADDED", Map.of("userId", userId)); notifications.taskAssigned(taskId, actorId, userId, task.getTitle()); }
+        taskAccessService.requireManagerOrLead(taskId, actorId);
+        Task task = getTaskEntity(taskId);
+        ensureWritable(task);
+        if (!taskMemberRepository.existsByTaskIdAndUserId(taskId, userId)) {
+            User user = userRepository.findById(userId).orElseThrow(() -> new AppException(HttpStatus.BAD_REQUEST, "USER_NOT_FOUND", "User not found"));
+            taskMemberRepository.save(new TaskMember(task, user, TaskMemberRole.MEMBER, userRepository.getReferenceById(actorId)));
+            taskActivityService.logActivity(taskId, actorId, "MEMBER_ADDED", Map.of("userId", userId));
+            notifications.taskAssigned(taskId, actorId, userId, task.getTitle());
+        }
         return getTaskDetails(taskId);
     }
+
     @Transactional
     public TaskResponse removeMember(Long taskId, Long actorId, Long userId) {
-        taskAccessService.requireManagerOrLead(taskId, actorId); ensureWritable(getTaskEntity(taskId)); if (taskMemberRepository.findByTaskIdAndUserId(taskId, userId).map(m -> m.getRole() == TaskMemberRole.LEAD).orElse(false)) throw new AppException(HttpStatus.BAD_REQUEST, "LEAD_MUST_CHANGE", "Change the Lead before removing them");
-        for (Subtask subtask : subtaskRepository.findByTaskId(taskId)) if (subtaskAssigneeRepository.existsBySubtaskIdAndUserId(subtask.getId(), userId)) subtaskAssigneeRepository.deleteBySubtaskIdAndUserId(subtask.getId(), userId);
-        taskMemberRepository.deleteByTaskIdAndUserId(taskId, userId); taskActivityService.logActivity(taskId, actorId, "MEMBER_REMOVED", Map.of("userId", userId)); return getTaskDetails(taskId);
+        taskAccessService.requireManagerOrLead(taskId, actorId);
+        ensureWritable(getTaskEntity(taskId));
+        if (taskMemberRepository.findByTaskIdAndUserId(taskId, userId).map(m -> m.getRole() == TaskMemberRole.LEAD).orElse(false)) {
+            throw new AppException(HttpStatus.BAD_REQUEST, "LEAD_MUST_CHANGE", "Change the Lead before removing them");
+        }
+        for (Subtask subtask : subtaskRepository.findByTaskId(taskId)) {
+            if (subtaskAssigneeRepository.existsBySubtaskIdAndUserId(subtask.getId(), userId)) {
+                subtaskAssigneeRepository.deleteBySubtaskIdAndUserId(subtask.getId(), userId);
+            }
+        }
+        taskMemberRepository.deleteByTaskIdAndUserId(taskId, userId);
+        taskActivityService.logActivity(taskId, actorId, "MEMBER_REMOVED", Map.of("userId", userId));
+        return getTaskDetails(taskId);
     }
+
     @Transactional
     public TaskResponse changeLead(Long taskId, Long actorId, Long userId) {
-        taskAccessService.requireManager(actorId); Task task = getTaskEntity(taskId); ensureWritable(task); User actor = userRepository.getReferenceById(actorId);
-        taskMemberRepository.findByTaskIdAndRole(taskId, TaskMemberRole.LEAD).ifPresent(old -> { old.setRole(TaskMemberRole.MEMBER); taskMemberRepository.save(old); });
-        TaskMember member = taskMemberRepository.findByTaskIdAndUserId(taskId, userId).orElseGet(() -> taskMemberRepository.save(new TaskMember(task, userRepository.getReferenceById(userId), TaskMemberRole.MEMBER, actor))); member.setRole(TaskMemberRole.LEAD); taskMemberRepository.save(member); taskActivityService.logActivity(taskId, actorId, "LEAD_CHANGED", Map.of("userId", userId)); return getTaskDetails(taskId);
+        taskAccessService.requireManager(actorId);
+        Task task = getTaskEntity(taskId);
+        ensureWritable(task);
+        User actor = userRepository.getReferenceById(actorId);
+        taskMemberRepository.findByTaskIdAndRole(taskId, TaskMemberRole.LEAD).ifPresent(old -> {
+            old.setRole(TaskMemberRole.MEMBER);
+            taskMemberRepository.save(old);
+        });
+        TaskMember member = taskMemberRepository.findByTaskIdAndUserId(taskId, userId).orElseGet(() ->
+                taskMemberRepository.save(new TaskMember(task, userRepository.getReferenceById(userId), TaskMemberRole.MEMBER, actor))
+        );
+        member.setRole(TaskMemberRole.LEAD);
+        taskMemberRepository.save(member);
+        taskActivityService.logActivity(taskId, actorId, "LEAD_CHANGED", Map.of("userId", userId));
+        return getTaskDetails(taskId);
     }
 
     public Task getTaskEntity(Long taskId) {
@@ -433,7 +637,11 @@ public class TaskService {
                 .orElseThrow(() -> new AppException(HttpStatus.NOT_FOUND, "TASK_NOT_FOUND", "Task not found with ID: " + taskId));
     }
 
-    private void ensureWritable(Task task) { if (task.getStatus() == TaskStatus.DONE) throw new AppException(HttpStatus.CONFLICT, "TASK_ARCHIVED", "Archived tasks are read-only until restored"); }
+    private void ensureWritable(Task task) {
+        if (task.getStatus() == TaskStatus.DONE) {
+            throw new AppException(HttpStatus.CONFLICT, "TASK_ARCHIVED", "Archived tasks are read-only until restored");
+        }
+    }
 
     public TaskResponse mapToResponse(Task task, List<Subtask> subtasks, List<Checkpoint> taskCheckpoints, List<TaskMember> members) {
         TaskResponse res = new TaskResponse();
@@ -446,9 +654,10 @@ public class TaskService {
         res.setPriority(task.getPriority());
         res.setStatus(task.getStatus());
         res.setDoneAt(task.getDoneAt());
-          res.setPurgeAt(task.getPurgeAt());
+        res.setPurgeAt(task.getPurgeAt());
         res.setCreatedAt(task.getCreatedAt());
         res.setUpdatedAt(task.getUpdatedAt());
+        res.setSelfReported(task.isSelfReported());
 
         if (task.getCreatedBy() != null) {
             res.setCreatedBy(UserSummary.from(task.getCreatedBy()));
